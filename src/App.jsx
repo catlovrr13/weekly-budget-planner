@@ -1,10 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
-import { DAYS, CATS, fmt, weekKey, addDays, short, group, snap, downloadTxt, downloadXlsx, parseReport } from './utils.js';
+import { DAYS, CATS, fmt, weekKey, addDays, short, group, snap, downloadTxt, downloadXlsx, parseReport, txtReport, mailtoLink } from './utils.js';
 
 const KEY = 'pinkBudgetReactV1';
 const SWATCHES = [['Blush', '#f4a6bd'], ['Rose', '#ee86a5'], ['Peach pink', '#f8b4b0'], ['Mauve', '#d9a0c0'], ['Petal', '#fbc8d8']];
 const EMPTY = { budget: 0, items: [] };
-const DEFAULTS = { weeks: {}, accent: '#f4a6bd', mode: 'auto' };
+const DEFAULTS = { weeks: {}, accent: '#f4a6bd', mode: 'auto', email: '' };
 
 function load() {
   try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) || '{}') }; }
@@ -171,6 +171,38 @@ function ExportCard({ s, cur }) {
   );
 }
 
+function EmailCard({ email, setEmail, s, cur }) {
+  const [msg, setMsg] = useState('');
+  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+
+  const send = () => {
+    if (!valid) { setMsg('Enter a valid email address first.'); document.getElementById('email')?.focus(); return; }
+    const { href, trimmed } = mailtoLink(email.trim(), s, cur);
+    setMsg(trimmed ? 'Your email app should open. The message was shortened to fit, so use Download .txt for the full report.' : 'Your email app should open with the summary ready to send.');
+    window.location.href = href;
+  };
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(txtReport(s, cur)); setMsg('Summary copied. Paste it anywhere.'); }
+    catch { setMsg('Couldn’t copy here. Try Download .txt instead.'); }
+  };
+
+  return (
+    <section className="card" aria-label="Email summary">
+      <h2>Email this week’s summary</h2>
+      <p className="sub" style={{ marginBottom: 12 }}>Opens your email app with the summary filled in. Just press send.</p>
+      <div className="row">
+        <div className="f" style={{ flex: '2 1 220px' }}>
+          <label htmlFor="email">Your email address</label>
+          <input id="email" type="email" inputMode="email" autoComplete="email" placeholder="you@example.com" value={email} onChange={(e) => { setEmail(e.target.value); setMsg(''); }} />
+        </div>
+        <button className="btn" onClick={send}>Email summary</button>
+        <button className="btn ghost" onClick={copy}>Copy summary</button>
+      </div>
+      <div className={'preview' + (msg.startsWith('Enter') ? ' bad' : '')} role="status">{msg}</div>
+    </section>
+  );
+}
+
 function ImportCard({ onLoad }) {
   const [file, setFile] = useState(null);
   const [err, setErr] = useState('');
@@ -280,6 +312,7 @@ export default function App() {
           <Breakdown s={s} />
         </div>
         <ExportCard s={s} cur={cur} />
+        <EmailCard email={db.email} setEmail={(v) => setDb((d) => ({ ...d, email: v }))} s={s} cur={cur} />
         <ImportCard onLoad={importWeek} />
         <ThemePanel db={db} setDb={setDb} onClear={clear} />
       </div>

@@ -109,3 +109,18 @@ export function parseReport(text) {
   });
   return { key, budget, items };
 }
+
+// Builds a mailto: link with the weekly report as the message body.
+// Mail apps cap link length, so a long report is trimmed (the .txt download always has everything).
+export function mailtoLink(to, s, key) {
+  const subject = `Weekly Budget: ${s.label}`;
+  let body = txtReport(s, key);
+  let trimmed = false;
+  while (encodeURIComponent(body).length > 1700) {
+    trimmed = true;
+    body = body.slice(0, Math.floor(body.length * 0.9));
+    body = body.slice(0, body.lastIndexOf('\n') + 1);
+  }
+  if (trimmed) body += '\r\n…(shortened to fit. Download the .txt for the full report.)';
+  return { trimmed, href: `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}` };
+}
