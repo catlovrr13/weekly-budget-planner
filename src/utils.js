@@ -124,3 +124,15 @@ export function mailtoLink(to, s, key) {
   if (trimmed) body += '\r\n…(shortened to fit. Download the .txt for the full report.)';
   return { trimmed, href: `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}` };
 }
+
+// A week belongs to the month its Thursday falls in, so every week is counted exactly once.
+export function monthOfWeek(key) {
+  const th = addDays(mondayOf(key), 3);
+  return { y: th.getFullYear(), mo: th.getMonth() };
+}
+export function weekKeysOfMonth(y, mo) {
+  const keys = [], d = new Date(y, mo, 1);
+  while (d.getDay() !== 4) d.setDate(d.getDate() + 1);
+  while (d.getMonth() === mo) { keys.push(weekKey(d)); d.setDate(d.getDate() + 7); }
+  return keys;
+}

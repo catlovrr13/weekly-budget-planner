@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { DAYS, CATS, fmt, weekKey, addDays, short, group, snap, downloadTxt, downloadXlsx, parseReport, txtReport, mailtoLink } from './utils.js';
+import { DAYS, CATS, fmt, weekKey, addDays, short, group, snap, downloadTxt, downloadXlsx, parseReport, txtReport, mailtoLink, monthOfWeek, weekKeysOfMonth } from './utils.js';
 
 const KEY = 'pinkBudgetReactV1';
 const SWATCHES = [['Blush', '#f4a6bd'], ['Rose', '#ee86a5'], ['Peach pink', '#f8b4b0'], ['Mauve', '#d9a0c0'], ['Petal', '#fbc8d8']];
@@ -248,6 +248,62 @@ function ImportCard({ onLoad }) {
   );
 }
 
+function weekStatus(s, now) {
+  const past = addDays(s.mon, 7) <= now, started = s.mon <= now;
+  if (!s.b && !s.items.length) return { cls: 'none', text: 'Nothing recorded' };
+  if (!s.b) return { cls: 'none', text: `No budget set · spent ${fmt(s.spent)}` };
+  if (s.rem < 0) return { cls: 'over', text: `Over by ${fmt(-s.rem)}` };
+  if (past) return { cls: 'good', text: `${fmt(s.rem)} left over` };
+  if (started) return { cls: 'good', text: `${fmt(s.rem)} left so far` };
+  return { cls: 'none', text: `Planned: ${fmt(s.b)}` };
+}
+
+function MonthPanel({ db, cur, setCur }) {
+  const [m, setM] = useState(() => monthOfWeek(cur));
+  useEffect(() => setM(monthOfWeek(cur)), [cur]);
+  const shift = (n) => setM(({ y, mo }) => { const d = new Date(y, mo + n, 1); return { y: d.getFullYear(), mo: d.getMonth() }; });
+  const now = new Date();
+  const weeks = weekKeysOfMonth(m.y, m.mo).map((key) => ({ key, s: snap(db.weeks[key] || EMPTY, key) }));
+  const tracked = weeks.filter((w) => w.s.b > 0);
+  const started = tracked.filter((w) => w.s.mon <= now);
+  const leftPast = tracked.filter((w) => addDays(w.s.mon, 7) <= now && w.s.rem > 0).reduce((a, w) => a + w.s.rem, 0);
+  const overTotal = tracked.filter((w) => w.s.rem < 0).reduce((a, w) => a - w.s.rem, 0);
+  const onTrack = started.filter((w) => w.s.rem >= 0).length;
+  const title = new Date(m.y, m.mo, 1).toLocaleDateString('en-PH', { month: 'long', year: 'numeric' });
+
+  return (
+    <section className="card" aria-label="Month overview">
+      <div className="mh">
+        <button className="btn ghost" onClick={() => shift(-1)} aria-label="Previous month">‹</button>
+        <h2>{title}</h2>
+        <button className="btn ghost" onClick={() => shift(1)} aria-label="Next month">›</button>
+      </div>
+      <div className="mstats">
+        <div className="mstat good"><small>Left from past weeks</small><b>{fmt(leftPast)}</b></div>
+        <div className={'mstat' + (overTotal > 0 ? ' over' : '')}><small>Went over by</small><b>{fmt(overTotal)}</b></div>
+        <div className="mstat" style={{ gridColumn: '1 / -1' }}><small>Weeks within budget</small><b>{started.length ? `${onTrack} of ${started.length}` : 'No weeks tracked yet'}</b></div>
+      </div>
+      {weeks.map(({ key, s }) => {
+        const st = weekStatus(s, now);
+        return (
+          <button key={key} className={'wk' + (key === cur ? ' sel' : '')} onClick={() => setCur(key)} aria-current={key === cur ? 'true' : undefined}>
+            <div className="wk-h"><b>{short(s.mon)} – {short(addDays(s.mon, 6))}</b><span className={'chip ' + st.cls}>{st.text}</span></div>
+            <div className="strip">
+              {DAYS.map((d, i) => {
+                const day = addDays(s.mon, i);
+                const cls = 'dy' + (day.getMonth() !== m.mo ? ' out' : '') + (day.toDateString() === now.toDateString() ? ' today' : '');
+                return <span key={d} className={cls}>{day.getDate()}{s.items.some((x) => x.day === i) && <i />}</span>;
+              })}
+            </div>
+            {s.b > 0 && <div className="wk-n">Budget {fmt(s.b)} · Spent {fmt(s.spent)}</div>}
+          </button>
+        );
+      })}
+      <p className="cap">Tap a week to open it. Dots mark days with expenses. Weeks are grouped by the month their Thursday falls in.</p>
+    </section>
+  );
+}
+
 function ThemePanel({ db, setDb, onClear }) {
   return (
     <section className="card" aria-label="Theme">
@@ -303,6 +359,8 @@ export default function App() {
       <div className="wrap">
         <h1>Weekly Budget Planner</h1>
         <p className="sub">Pick a week, set your budget, and watch it update with every expense you add.</p>
+        <div className="layout">
+        <main>
         <WeekPicker cur={cur} setCur={setCur} s={s} />
         <section className="card"><BudgetInput cur={cur} rev={rev} defaultValue={w.budget} onChange={(v) => update((x) => ({ ...x, budget: v }))} /></section>
         <Summary s={s} cur={cur} />
@@ -315,6 +373,9 @@ export default function App() {
         <EmailCard email={db.email} setEmail={(v) => setDb((d) => ({ ...d, email: v }))} s={s} cur={cur} />
         <ImportCard onLoad={importWeek} />
         <ThemePanel db={db} setDb={setDb} onClear={clear} />
+        </main>
+        <aside className="side"><MonthPanel db={db} cur={cur} setCur={setCur} /></aside>
+        </div>
       </div>
       <div className={'dock' + (over ? ' neg' : '')} aria-live="polite">
         <div><small>{over ? 'Over budget by' : 'Remaining this week'}</small><b>{fmt(Math.abs(s.rem))}</b></div>
