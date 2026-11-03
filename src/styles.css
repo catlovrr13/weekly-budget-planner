@@ -111,3 +111,30 @@ input[type=file]::file-selector-button{background:var(--accent);border:0;border-
 .wk-n{margin-top:6px;font-size:.78rem;color:var(--muted)}
 .cap{font-size:.76rem;color:var(--muted);margin:4px 0 0}
 @media(max-width:900px){.layout{grid-template-columns:1fr}.side{position:static}}
+
+label.f{font-size:inherit;color:inherit;font-weight:inherit}
+label.f>span{font-size:.82rem;color:var(--muted);font-weight:600}
+.dlist{margin-top:14px}
+.dli{padding:12px 0;border-bottom:1px solid var(--line)}
+.dli:last-child{border:0}
+.dli.done .grow,.dli.done .amt{opacity:.55}
+.dtop{display:flex;align-items:flex-start;gap:10px;justify-content:space-between}
+.dli .bar{margin:8px 0 4px;height:10px}
+.acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.btn.sm{padding:6px 12px;min-height:34px;font-size:.85rem}
+.hint{font-size:.8rem;color:var(--muted);margin:10px 0 0}
+
+.side{max-height:calc(100vh - 32px);overflow:auto}
+@media(max-width:900px){.side{max-height:none;overflow:visible}}
+.rating{display:flex;gap:14px;align-items:center}
+.face{font-size:2.8rem;line-height:1}
+.rbody{min-width:0}
+.stars{color:#ee86a5;font-size:1.35rem;letter-spacing:.1em;line-height:1.2}
+.rl{font-family:"Fraunces",Georgia,serif;font-size:1.1rem}
+.score{color:var(--muted);font-size:.85rem;margin-left:8px}
+.why{margin:8px 0 0;padding:0;list-style:none;font-size:.85rem;color:var(--muted)}
+.why li::before{content:"♡ ";color:var(--accent)}
+.sec{font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:14px 0 8px}
+.exp{display:flex;justify-content:space-between;gap:8px;font-size:.85rem;padding:6px 10px;background:var(--bg);border-radius:10px;margin-bottom:6px}
+.exp.late{color:var(--over);font-weight:700}
+.mstars{color:#ee86a5;letter-spacing:.08em}

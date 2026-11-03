@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx';
 
 export const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-export const CATS = ['Food', 'Transport', 'Bills', 'Shopping', 'Health', 'Fun', 'Other'];
+export const CATS = ['Food', 'Transport', 'Bills', 'Shopping', 'Health', 'Fun', 'Debt', 'Other'];
 export const fmt = (n) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(n || 0);
 export const peso = (n) => '₱' + n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -38,9 +38,13 @@ export function snap(w, key) {
   return { mon, b, items, spent, rem: b - spent, label: `${short(mon)} – ${short(end)}, ${end.getFullYear()}` };
 }
 
-export function txtReport(s, key) {
+export function txtReport(s, key, extra = {}) {
+  const { debts = [], owed = [] } = extra;
+  const r = rateWeek(s, debts);
   const L = ['WEEKLY BUDGET', `Week: ${s.label} (${key})`, ''];
-  L.push('Budget:    ' + peso(s.b), 'Spent:     ' + peso(s.spent), s.rem < 0 ? 'Over budget by: ' + peso(-s.rem) : 'Remaining: ' + peso(s.rem), '', 'EXPENSES');
+  L.push('Budget:    ' + peso(s.b), 'Spent:     ' + peso(s.spent), s.rem < 0 ? 'Over budget by: ' + peso(-s.rem) : 'Remaining: ' + peso(s.rem));
+  if (r) L.push(`Rating:    ${starText(r.stars)} ${r.label} (${r.score}/100)`);
+  L.push('', 'EXPENSES');
   if (!s.items.length) L.push('(none added)');
   DAYS.forEach((d, i) => {
     const day = s.items.filter((x) => x.day === i);
@@ -51,20 +55,29 @@ export function txtReport(s, key) {
   });
   const g = group(s.items, 'cat');
   if (g.length) { L.push('', 'BY CATEGORY'); g.forEach(([n, v]) => L.push('  ' + n.padEnd(12) + peso(v))); }
+  const weekPaid = (id) => s.items.filter((i) => i.debtId === id).reduce((a, i) => a + i.amt, 0);
+  L.push('', 'MONEY I OWE (balances as of export)');
+  if (!debts.length) L.push('  (none listed)');
+  debts.forEach((d) => { const w = weekPaid(d.id); L.push(`  - ${d.lender} (${d.purpose}): ${peso(d.left)} left of ${peso(d.amount)}${w ? ' | paid this week ' + peso(w) : ''}`); });
+  if (debts.length) L.push('  Total still owed: ' + peso(debts.reduce((a, d) => a + d.left, 0)));
+  L.push('', 'MONEY OWED TO ME');
+  if (!owed.length) L.push('  (none listed)');
+  owed.forEach((o) => L.push(`  - ${o.person}: ${peso(o.amount)} | borrowed ${fmtDate(o.borrowedOn)} | ${o.promisedOn ? 'promised ' + fmtDate(o.promisedOn) : 'no pay date given'}${o.paid ? ' | PAID BACK' : isLate(o) ? ' | PAST DUE' : ''}`));
+  if (owed.length) L.push('  Total still owed to me: ' + peso(owed.filter((o) => !o.paid).reduce((a, o) => a + o.amount, 0)));
   L.push('', 'Total spent: ' + peso(s.spent), 'Exported: ' + new Date().toLocaleString('en-PH'));
   return L.join('\r\n');
 }
 
-export function downloadTxt(s, key) {
+export function downloadTxt(s, key, extra) {
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([txtReport(s, key)], { type: 'text/plain;charset=utf-8' }));
+  a.href = URL.createObjectURL(new Blob([txtReport(s, key, extra)], { type: 'text/plain;charset=utf-8' }));
   a.download = `budget-${key}.txt`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
-export function downloadXlsx(s, key) {
-  const n = s.items.length, PESO = '"₱"#,##0.00', cats = group(s.items, 'cat');
+export function downloadXlsx(s, key, extra = {}) {
+  const n = s.items.length, PESO = '"₱"#,##0.00', cats = group(s.items, 'cat'), { debts = [], owed = [] } = extra, r = rateWeek(s, debts);
   const rows = [['Date', 'Day', 'Item', 'Category', 'Amount (PHP)']];
   s.items.forEach((x) => rows.push([dateOf(s.mon, x.day), DAYS[x.day], x.name, x.cat, x.amt]));
   rows.push([], ['', '', '', 'Total', s.spent]);
@@ -74,7 +87,7 @@ export function downloadXlsx(s, key) {
   ex['E' + tr] = n ? { t: 'n', v: s.spent, f: `SUM(E2:E${n + 1})`, z: PESO } : { t: 'n', v: 0, z: PESO };
   ex['!cols'] = [{ wch: 14 }, { wch: 7 }, { wch: 30 }, { wch: 14 }, { wch: 16 }];
   const sm = XLSX.utils.aoa_to_sheet([
-    ['Weekly Budget'], ['Week', s.label], [],
+    ['Weekly Budget'], ['Week', s.label], ['Rating', r ? `${starText(r.stars)} ${r.label} (${r.score}/100)` : 'Not rated yet'],
     ['Budget (PHP)', s.b], ['Spent (PHP)', s.spent],
     [s.rem < 0 ? 'Over budget by (PHP)' : 'Remaining (PHP)', Math.abs(s.rem)], [],
     ['Category', 'Spent (PHP)'], ...cats,
@@ -87,6 +100,26 @@ export function downloadXlsx(s, key) {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, sm, 'Summary');
   XLSX.utils.book_append_sheet(wb, ex, 'Expenses');
+  const weekPaid = (id) => s.items.filter((i) => i.debtId === id).reduce((a, i) => a + i.amt, 0);
+  const dr = [['Lender', 'Purpose', 'Amount borrowed (PHP)', 'Paid so far (PHP)', 'Left (PHP)', 'Paid this week (PHP)']];
+  debts.forEach((d) => dr.push([d.lender, d.purpose, d.amount, d.paid, d.left, weekPaid(d.id)]));
+  const sums = [(d) => d.amount, (d) => d.paid, (d) => d.left, (d) => weekPaid(d.id)].map((f) => debts.reduce((a, d) => a + f(d), 0));
+  dr.push([], ['Total', '', ...sums]);
+  const dn = debts.length, dsh = XLSX.utils.aoa_to_sheet(dr), money = ['C', 'D', 'E', 'F'];
+  debts.forEach((_, i) => money.forEach((c) => (dsh[c + (i + 2)].z = PESO)));
+  money.forEach((c, i) => { dsh[c + (dn + 3)] = { t: 'n', v: sums[i], f: dn ? `SUM(${c}2:${c}${dn + 1})` : '0', z: PESO }; });
+  dsh['!cols'] = [{ wch: 22 }, { wch: 26 }, { wch: 20 }, { wch: 18 }, { wch: 14 }, { wch: 20 }];
+  const status = (o) => (o.paid ? 'Paid back' : isLate(o) ? 'Past due' : o.promisedOn ? 'Waiting' : 'Waiting (no pay date)');
+  const orows = [['Person', 'Amount (PHP)', 'Date borrowed', 'Promised pay date', 'Status']];
+  owed.forEach((o) => orows.push([o.person, o.amount, fmtDate(o.borrowedOn), o.promisedOn ? fmtDate(o.promisedOn) : '', status(o)]));
+  const on = owed.length, stillOwed = owed.filter((o) => !o.paid).reduce((a, o) => a + o.amount, 0);
+  orows.push([], ['Still owed to me', stillOwed]);
+  const osh = XLSX.utils.aoa_to_sheet(orows);
+  owed.forEach((_, i) => (osh['B' + (i + 2)].z = PESO));
+  osh['B' + (on + 3)] = { t: 'n', v: stillOwed, f: on ? `SUMIF(E2:E${on + 1},"<>Paid back",B2:B${on + 1})` : '0', z: PESO };
+  osh['!cols'] = [{ wch: 22 }, { wch: 16 }, { wch: 16 }, { wch: 20 }, { wch: 22 }];
+  XLSX.utils.book_append_sheet(wb, dsh, 'Debts I owe');
+  XLSX.utils.book_append_sheet(wb, osh, 'Owed to me');
   XLSX.writeFile(wb, `budget-${key}.xlsx`);
 }
 
@@ -99,7 +132,10 @@ export function parseReport(text) {
   const budget = parseFloat((text.match(/^Budget:\s*₱?\s*([\d,]+(?:\.\d+)?)/m)?.[1] || '0').replace(/,/g, '')) || 0;
   const items = [];
   let day = 0;
+  let stop = false;
   text.split(/\r?\n/).forEach((line) => {
+    if (line.startsWith('MONEY I OWE')) stop = true;
+    if (stop) return;
     const d = DAYS.indexOf(line.slice(0, 3));
     if (d >= 0 && line[3] === ',') { day = d; return; }
     const m = line.match(/^\s*-\s+(.+?)\s+\[([^\]]+)\]:\s*₱?\s*([\d,]+(?:\.\d+)?)\s*$/);
@@ -112,9 +148,9 @@ export function parseReport(text) {
 
 // Builds a mailto: link with the weekly report as the message body.
 // Mail apps cap link length, so a long report is trimmed (the .txt download always has everything).
-export function mailtoLink(to, s, key) {
+export function mailtoLink(to, s, key, extra) {
   const subject = `Weekly Budget: ${s.label}`;
-  let body = txtReport(s, key);
+  let body = txtReport(s, key, extra);
   let trimmed = false;
   while (encodeURIComponent(body).length > 1700) {
     trimmed = true;
@@ -135,4 +171,46 @@ export function weekKeysOfMonth(y, mo) {
   while (d.getDay() !== 4) d.setDate(d.getDate() + 1);
   while (d.getMonth() === mo) { keys.push(weekKey(d)); d.setDate(d.getDate() + 7); }
   return keys;
+}
+
+// Dates for the debt lists are stored as plain YYYY-MM-DD strings.
+export const todayStr = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+export const fmtDate = (str) => {
+  if (!str) return '';
+  const [y, m, d] = str.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' });
+};
+
+export const isLate = (o) => !o.paid && !!o.promisedOn && o.promisedOn < todayStr();
+
+// ---- Weekly rating (recalculated from the week's data every render) ----
+export const starsFor = (score) => (score >= 90 ? 5 : score >= 75 ? 4 : score >= 60 ? 3 : score >= 40 ? 2 : 1);
+export const starText = (n) => '★'.repeat(n) + '☆'.repeat(5 - n);
+const MOODS = { 5: ['🌟', 'Budget superstar!'], 4: ['😊', 'Doing great'], 3: ['🙂', 'Not bad at all'], 2: ['😅', 'A little tight'], 1: ['🥺', 'Tough week, you’ve got this'] };
+
+// 70 pts budget control, 15 pts debt care, 15 pts spreading spending out. Needs a budget and some expenses.
+export function rateWeek(s, debts = []) {
+  if (!(s.b > 0) || !s.items.length) return null;
+  const ratio = s.spent / s.b;
+  const budgetPts = ratio <= 0.85 ? 70 : ratio <= 1 ? 70 - ((ratio - 0.85) / 0.15) * 20 : 40 - Math.min(40, (ratio - 1) * 130);
+  const paid = s.items.filter((i) => i.debtId).reduce((a, i) => a + i.amt, 0);
+  const owing = debts.some((d) => d.left > 0) || paid > 0;
+  const debtPts = !owing || paid > 0 ? 15 : 5;
+  const perDay = {};
+  s.items.forEach((i) => (perDay[i.day] = (perDay[i.day] || 0) + i.amt));
+  const share = Math.max(...Object.values(perDay)) / s.spent;
+  const spreadPts = s.items.length < 3 || share <= 0.4 ? 15 : share >= 0.8 ? 5 : 15 - ((share - 0.4) / 0.4) * 10;
+  const score = Math.round(budgetPts + debtPts + spreadPts);
+  const stars = starsFor(score);
+  const notes = [
+    ratio <= 0.85 ? `Used ${Math.round(ratio * 100)}% of your budget with ${fmt(s.rem)} to spare`
+      : ratio <= 1 ? `Cutting it close: ${Math.round(ratio * 100)}% of your budget used`
+      : `Over budget by ${fmt(-s.rem)}`,
+    !owing ? 'No debts to worry about' : paid > 0 ? `Paid ${fmt(paid)} toward your debts` : 'No debt payment yet this week',
+  ];
+  if (s.items.length >= 3) notes.push(share > 0.6 ? `${Math.round(share * 100)}% of your spending landed on one day` : 'Spending was nicely spread out');
+  return { score, stars, face: MOODS[stars][0], label: MOODS[stars][1], notes, paid };
 }

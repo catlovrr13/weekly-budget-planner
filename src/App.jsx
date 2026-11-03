@@ -1,10 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
-import { DAYS, CATS, fmt, weekKey, addDays, short, group, snap, downloadTxt, downloadXlsx, parseReport, txtReport, mailtoLink, monthOfWeek, weekKeysOfMonth } from './utils.js';
+import { DAYS, CATS, fmt, weekKey, addDays, short, group, snap, downloadTxt, downloadXlsx, parseReport, txtReport, mailtoLink, monthOfWeek, weekKeysOfMonth, fmtDate, todayStr, rateWeek, starsFor, starText } from './utils.js';
 
 const KEY = 'pinkBudgetReactV1';
 const SWATCHES = [['Blush', '#f4a6bd'], ['Rose', '#ee86a5'], ['Peach pink', '#f8b4b0'], ['Mauve', '#d9a0c0'], ['Petal', '#fbc8d8']];
 const EMPTY = { budget: 0, items: [] };
-const DEFAULTS = { weeks: {}, accent: '#f4a6bd', mode: 'auto', email: '' };
+const DEFAULTS = { weeks: {}, accent: '#f4a6bd', mode: 'auto', email: '', debts: [], owed: [] };
 
 function load() {
   try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) || '{}') }; }
@@ -68,20 +68,26 @@ function Summary({ s, cur }) {
   );
 }
 
-function ExpenseForm({ cur, s, onAdd }) {
+function ExpenseForm({ cur, s, onAdd, debts = [] }) {
   const todayIdx = weekKey(new Date()) === cur ? (new Date().getDay() + 6) % 7 : 0;
-  const [f, setF] = useState({ name: '', amt: '', cat: CATS[0], day: todayIdx });
+  const [f, setF] = useState({ name: '', amt: '', cat: CATS[0], day: todayIdx, debt: '' });
   useEffect(() => setF((x) => ({ ...x, day: todayIdx })), [cur, todayIdx]);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const a = parseFloat(f.amt), after = s.rem - a;
+  const dbt = debts.find((d) => String(d.id) === f.debt);
+  const tooMuch = !!dbt && a > dbt.left;
+  const pickDebt = (e) => {
+    const d = debts.find((x) => String(x.id) === e.target.value);
+    setF({ ...f, debt: e.target.value, cat: d ? 'Debt' : f.cat, name: d && !f.name.trim() ? `Payment to ${d.lender}` : f.name });
+  };
   const focus = (id) => document.getElementById(id)?.focus();
 
   const submit = (e) => {
     e.preventDefault();
     if (!f.name.trim()) return focus('name');
-    if (!(a > 0)) return focus('amt');
-    onAdd({ id: Date.now(), name: f.name.trim(), amt: Math.round(a * 100) / 100, cat: f.cat, day: +f.day });
-    setF({ ...f, name: '', amt: '' });
+    if (!(a > 0) || tooMuch) return focus('amt');
+    onAdd({ id: Date.now(), name: f.name.trim(), amt: Math.round(a * 100) / 100, cat: dbt ? 'Debt' : f.cat, day: +f.day, ...(dbt ? { debtId: dbt.id } : {}) });
+    setF({ ...f, name: '', amt: '', debt: '' });
     focus('name');
   };
 
@@ -107,16 +113,28 @@ function ExpenseForm({ cur, s, onAdd }) {
             {DAYS.map((d, i) => <option key={d} value={i}>{d}, {short(addDays(s.mon, i))}</option>)}
           </select>
         </div>
+        {debts.length > 0 && (
+          <div className="f" style={{ flex: '2 1 220px' }}>
+            <label htmlFor="debt">This pays off a debt (optional)</label>
+            <select id="debt" value={f.debt} onChange={pickDebt}>
+              <option value="">No, regular expense</option>
+              {debts.map((d) => <option key={d.id} value={d.id}>{d.lender}: {fmt(d.left)} left</option>)}
+            </select>
+          </div>
+        )}
         <button className="btn" type="submit" id="add">Add expense</button>
       </form>
-      <div className={'preview' + (a > 0 && after < 0 ? ' bad' : '')}>
-        {a > 0 && (after < 0 ? `Adding this would put you over budget by ${fmt(-after)}.` : `After this, you’ll have ${fmt(after)} left.`)}
+      <div className={'preview' + (a > 0 && (after < 0 || tooMuch) ? ' bad' : '')}>
+        {a > 0 && (tooMuch
+          ? `That’s more than the ${fmt(dbt.left)} left on this debt.`
+          : (after < 0 ? `Adding this would put you over budget by ${fmt(-after)}.` : `After this, you’ll have ${fmt(after)} left.`)
+            + (dbt ? ` ${dbt.lender}’s debt will drop to ${fmt(dbt.left - a)}.` : ''))}
       </div>
     </section>
   );
 }
 
-function ExpenseList({ s, onDelete }) {
+function ExpenseList({ s, onDelete, lenders = {} }) {
   return (
     <section className="card" aria-label="Expenses">
       <h2>This week’s expenses</h2>
@@ -124,7 +142,7 @@ function ExpenseList({ s, onDelete }) {
         {!s.items.length && <li className="empty">No expenses yet for this week.</li>}
         {s.items.map((i) => (
           <li className="item" key={i.id}>
-            <div className="grow"><b>{i.name}</b><span>{DAYS[i.day]}, {short(addDays(s.mon, i.day))}</span></div>
+            <div className="grow"><b>{i.name}</b><span>{DAYS[i.day]}, {short(addDays(s.mon, i.day))}{i.debtId && lenders[i.debtId] ? ` · pays ${lenders[i.debtId]}` : ''}</span></div>
             <span className="tag">{i.cat}</span>
             <span className="amt">{fmt(i.amt)}</span>
             <button className="x" onClick={() => onDelete(i.id)} aria-label={`Delete ${i.name}`}>✕</button>
@@ -158,31 +176,31 @@ function Breakdown({ s }) {
   );
 }
 
-function ExportCard({ s, cur }) {
+function ExportCard({ s, cur, extra }) {
   return (
     <section className="card" aria-label="Export">
       <h2>Export this week</h2>
       <p className="sub" style={{ marginBottom: 12 }}>Save the budget, summary and every expense for the week you’re viewing.</p>
       <div className="row">
-        <button className="btn" onClick={() => downloadTxt(s, cur)}>Download .txt</button>
-        <button className="btn" onClick={() => downloadXlsx(s, cur)}>Download Excel (.xlsx)</button>
+        <button className="btn" onClick={() => downloadTxt(s, cur, extra)}>Download .txt</button>
+        <button className="btn" onClick={() => downloadXlsx(s, cur, extra)}>Download Excel (.xlsx)</button>
       </div>
     </section>
   );
 }
 
-function EmailCard({ email, setEmail, s, cur }) {
+function EmailCard({ email, setEmail, s, cur, extra }) {
   const [msg, setMsg] = useState('');
   const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 
   const send = () => {
     if (!valid) { setMsg('Enter a valid email address first.'); document.getElementById('email')?.focus(); return; }
-    const { href, trimmed } = mailtoLink(email.trim(), s, cur);
+    const { href, trimmed } = mailtoLink(email.trim(), s, cur, extra);
     setMsg(trimmed ? 'Your email app should open. The message was shortened to fit, so use Download .txt for the full report.' : 'Your email app should open with the summary ready to send.');
     window.location.href = href;
   };
   const copy = async () => {
-    try { await navigator.clipboard.writeText(txtReport(s, cur)); setMsg('Summary copied. Paste it anywhere.'); }
+    try { await navigator.clipboard.writeText(txtReport(s, cur, extra)); setMsg('Summary copied. Paste it anywhere.'); }
     catch { setMsg('Couldn’t copy here. Try Download .txt instead.'); }
   };
 
@@ -248,6 +266,132 @@ function ImportCard({ onLoad }) {
   );
 }
 
+function DebtForm({ initial, submitLabel, onSave, onCancel }) {
+  const [f, setF] = useState(initial);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const submit = (e) => {
+    e.preventDefault();
+    onSave({ lender: f.lender.trim(), purpose: f.purpose.trim(), amount: Math.round(parseFloat(f.amount) * 100) / 100 });
+    if (!onCancel) setF(initial);
+  };
+  return (
+    <form className="row" onSubmit={submit}>
+      <label className="f"><span>Who did you borrow from?</span><input required maxLength={60} value={f.lender} onChange={set('lender')} placeholder="e.g. Ate Joy" /></label>
+      <label className="f"><span>What was it for?</span><input required maxLength={80} value={f.purpose} onChange={set('purpose')} placeholder="e.g. Tuition" /></label>
+      <label className="f"><span>Amount borrowed (₱)</span><input required type="number" min="0.01" step="0.01" inputMode="decimal" value={f.amount} onChange={set('amount')} placeholder="0.00" /></label>
+      <button className="btn" type="submit">{submitLabel}</button>
+      {onCancel && <button className="btn ghost" type="button" onClick={onCancel}>Cancel</button>}
+    </form>
+  );
+}
+
+function DebtsCard({ rows, onAdd, onEdit, onDelete }) {
+  const [editing, setEditing] = useState(null);
+  const totalLeft = rows.reduce((a, d) => a + d.left, 0);
+  const totalPaid = rows.reduce((a, d) => a + Math.min(d.paid, d.amount), 0);
+  return (
+    <section className="card" aria-label="Money I owe">
+      <h2>Money I owe</h2>
+      <div className="mstats">
+        <div className={'mstat' + (totalLeft > 0 ? ' over' : ' good')}><small>Still owed</small><b>{fmt(totalLeft)}</b></div>
+        <div className="mstat good"><small>Paid so far</small><b>{fmt(totalPaid)}</b></div>
+      </div>
+      <DebtForm initial={{ lender: '', purpose: '', amount: '' }} submitLabel="Add debt" onSave={onAdd} />
+      <ul className="dlist">
+        {!rows.length && <li className="empty">No debts listed.</li>}
+        {rows.map((d) => editing === d.id ? (
+          <li className="dli" key={d.id}>
+            <DebtForm initial={{ lender: d.lender, purpose: d.purpose, amount: String(d.amount) }} submitLabel="Save"
+              onSave={(v) => { onEdit(d.id, v); setEditing(null); }} onCancel={() => setEditing(null)} />
+          </li>
+        ) : (
+          <li className="dli" key={d.id}>
+            <div className="dtop">
+              <div className="grow"><b>{d.lender}</b><span>{d.purpose}</span></div>
+              <span className={'chip ' + (d.left === 0 ? 'good' : 'over')}>{d.left === 0 ? 'Paid off' : `${fmt(d.left)} left`}</span>
+            </div>
+            <div className="bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(Math.min(100, (d.paid / d.amount) * 100))} aria-label={`Paid toward ${d.lender}`}>
+              <i style={{ width: Math.min(100, (d.paid / d.amount) * 100) + '%' }} />
+            </div>
+            <div className="wk-n">Paid {fmt(d.paid)} of {fmt(d.amount)} · {d.count} payment{d.count === 1 ? '' : 's'}</div>
+            <div className="acts">
+              <button className="btn ghost sm" onClick={() => setEditing(d.id)}>Edit</button>
+              <button className="btn ghost sm" onClick={() => onDelete(d)}>Delete</button>
+            </div>
+          </li>
+        ))}
+      </ul>
+      <p className="hint">To pay a debt down, add an expense above and pick the debt under “This pays off a debt.” Its balance drops automatically, and goes back up if you delete that expense.</p>
+    </section>
+  );
+}
+
+function OwedForm({ initial, submitLabel, onSave, onCancel }) {
+  const [f, setF] = useState(initial);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const submit = (e) => {
+    e.preventDefault();
+    onSave({ person: f.person.trim(), amount: Math.round(parseFloat(f.amount) * 100) / 100, borrowedOn: f.borrowedOn, promisedOn: f.promisedOn });
+    if (!onCancel) setF(initial);
+  };
+  return (
+    <form className="row" onSubmit={submit}>
+      <label className="f"><span>Who owes you?</span><input required maxLength={60} value={f.person} onChange={set('person')} placeholder="e.g. Mark" /></label>
+      <label className="f"><span>Amount (₱)</span><input required type="number" min="0.01" step="0.01" inputMode="decimal" value={f.amount} onChange={set('amount')} placeholder="0.00" /></label>
+      <label className="f"><span>Date borrowed</span><input required type="date" value={f.borrowedOn} onChange={set('borrowedOn')} /></label>
+      <label className="f"><span>Promised pay date (optional)</span><input type="date" value={f.promisedOn} onChange={set('promisedOn')} /></label>
+      <button className="btn" type="submit">{submitLabel}</button>
+      {onCancel && <button className="btn ghost" type="button" onClick={onCancel}>Cancel</button>}
+    </form>
+  );
+}
+
+function OwedCard({ list, onAdd, onEdit, onDelete }) {
+  const [editing, setEditing] = useState(null);
+  const today = todayStr();
+  const late = (x) => !x.paid && x.promisedOn && x.promisedOn < today;
+  const unpaid = list.filter((x) => !x.paid);
+  const overdue = unpaid.filter(late);
+  const sorted = [...list].sort((a, b) =>
+    Number(!!a.paid) - Number(!!b.paid) || (a.promisedOn || '9999').localeCompare(b.promisedOn || '9999') || a.borrowedOn.localeCompare(b.borrowedOn));
+  return (
+    <section className="card" aria-label="Money owed to me">
+      <h2>Money owed to me</h2>
+      <div className="mstats">
+        <div className="mstat good"><small>Still owed to me</small><b>{fmt(unpaid.reduce((a, x) => a + x.amount, 0))}</b></div>
+        <div className={'mstat' + (overdue.length ? ' over' : '')}><small>Past promised date</small><b>{overdue.length ? fmt(overdue.reduce((a, x) => a + x.amount, 0)) : 'None'}</b></div>
+      </div>
+      <OwedForm initial={{ person: '', amount: '', borrowedOn: today, promisedOn: '' }} submitLabel="Add" onSave={onAdd} />
+      <ul className="dlist">
+        {!sorted.length && <li className="empty">Nobody owes you right now.</li>}
+        {sorted.map((x) => editing === x.id ? (
+          <li className="dli" key={x.id}>
+            <OwedForm initial={{ person: x.person, amount: String(x.amount), borrowedOn: x.borrowedOn, promisedOn: x.promisedOn || '' }} submitLabel="Save"
+              onSave={(v) => { onEdit(x.id, v); setEditing(null); }} onCancel={() => setEditing(null)} />
+          </li>
+        ) : (
+          <li className={'dli' + (x.paid ? ' done' : '')} key={x.id}>
+            <div className="dtop">
+              <div className="grow">
+                <b>{x.person}</b>
+                <span>Borrowed {fmtDate(x.borrowedOn)} · {x.promisedOn ? `Promised to pay ${fmtDate(x.promisedOn)}` : 'No pay date given'}</span>
+              </div>
+              <span className="amt">{fmt(x.amount)}</span>
+            </div>
+            {x.paid && <span className="chip good">Paid back</span>}
+            {late(x) && <span className="chip over">Past promised date</span>}
+            <div className="acts">
+              <button className="btn ghost sm" onClick={() => onEdit(x.id, { paid: !x.paid })}>{x.paid ? 'Mark unpaid' : 'Mark paid back'}</button>
+              <button className="btn ghost sm" onClick={() => setEditing(x.id)}>Edit</button>
+              <button className="btn ghost sm" onClick={() => onDelete(x)}>Delete</button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function weekStatus(s, now) {
   const past = addDays(s.mon, 7) <= now, started = s.mon <= now;
   if (!s.b && !s.items.length) return { cls: 'none', text: 'Nothing recorded' };
@@ -258,17 +402,49 @@ function weekStatus(s, now) {
   return { cls: 'none', text: `Planned: ${fmt(s.b)}` };
 }
 
-function MonthPanel({ db, cur, setCur }) {
+function RatingCard({ s, debts }) {
+  const r = rateWeek(s, debts);
+  const now = new Date();
+  const live = s.mon <= now && addDays(s.mon, 7) > now;
+  if (!r) return (
+    <section className="card rating" aria-label="Weekly rating">
+      <div className="face" aria-hidden="true">🌸</div>
+      <div className="rbody"><b className="rl">Your weekly rating</b><p className="sub" style={{ margin: 0 }}>Set a budget and add a few expenses to see how you’re doing this week.</p></div>
+    </section>
+  );
+  return (
+    <section className="card rating" aria-label="Weekly rating">
+      <div className="face" aria-hidden="true">{r.face}</div>
+      <div className="rbody">
+        <div className="stars" role="img" aria-label={`${r.stars} out of 5 stars`}>{starText(r.stars)}</div>
+        <b className="rl">{r.label}</b><span className="score">{r.score}/100{live ? ' so far' : ''}</span>
+        <ul className="why">{r.notes.map((n) => <li key={n}>{n}</li>)}</ul>
+      </div>
+    </section>
+  );
+}
+
+function MonthPanel({ db, cur, setCur, debtRows }) {
   const [m, setM] = useState(() => monthOfWeek(cur));
   useEffect(() => setM(monthOfWeek(cur)), [cur]);
   const shift = (n) => setM(({ y, mo }) => { const d = new Date(y, mo + n, 1); return { y: d.getFullYear(), mo: d.getMonth() }; });
-  const now = new Date();
-  const weeks = weekKeysOfMonth(m.y, m.mo).map((key) => ({ key, s: snap(db.weeks[key] || EMPTY, key) }));
+  const now = new Date(), today = todayStr();
+  const weeks = weekKeysOfMonth(m.y, m.mo).map((key) => {
+    const s = snap(db.weeks[key] || EMPTY, key);
+    return { key, s, r: rateWeek(s, debtRows), debtPaid: s.items.filter((i) => i.debtId).reduce((a, i) => a + i.amt, 0) };
+  });
   const tracked = weeks.filter((w) => w.s.b > 0);
   const started = tracked.filter((w) => w.s.mon <= now);
   const leftPast = tracked.filter((w) => addDays(w.s.mon, 7) <= now && w.s.rem > 0).reduce((a, w) => a + w.s.rem, 0);
   const overTotal = tracked.filter((w) => w.s.rem < 0).reduce((a, w) => a - w.s.rem, 0);
   const onTrack = started.filter((w) => w.s.rem >= 0).length;
+  const rated = weeks.filter((w) => w.r);
+  const avg = rated.length ? Math.round(rated.reduce((a, w) => a + w.r.score, 0) / rated.length) : null;
+  const debtPaidMonth = weeks.reduce((a, w) => a + w.debtPaid, 0);
+  const debtLeft = debtRows.reduce((a, d) => a + d.left, 0);
+  const owedTotal = db.owed.filter((o) => !o.paid).reduce((a, o) => a + o.amount, 0);
+  const prefix = `${m.y}-${String(m.mo + 1).padStart(2, '0')}`;
+  const expected = db.owed.filter((o) => !o.paid && o.promisedOn && o.promisedOn.startsWith(prefix)).sort((a, b) => a.promisedOn.localeCompare(b.promisedOn));
   const title = new Date(m.y, m.mo, 1).toLocaleDateString('en-PH', { month: 'long', year: 'numeric' });
 
   return (
@@ -283,7 +459,25 @@ function MonthPanel({ db, cur, setCur }) {
         <div className={'mstat' + (overTotal > 0 ? ' over' : '')}><small>Went over by</small><b>{fmt(overTotal)}</b></div>
         <div className="mstat" style={{ gridColumn: '1 / -1' }}><small>Weeks within budget</small><b>{started.length ? `${onTrack} of ${started.length}` : 'No weeks tracked yet'}</b></div>
       </div>
-      {weeks.map(({ key, s }) => {
+      <h3 className="sec">Debts and loans</h3>
+      <div className="mstats">
+        <div className="mstat good"><small>Paid toward debts</small><b>{fmt(debtPaidMonth)}</b></div>
+        <div className={'mstat' + (debtLeft > 0 ? ' over' : ' good')}><small>Debts still owed</small><b>{fmt(debtLeft)}</b></div>
+        <div className="mstat good"><small>Owed to me</small><b>{fmt(owedTotal)}</b></div>
+        <div className="mstat"><small>Average rating</small><b>{avg === null ? 'Not rated yet' : `${starText(starsFor(avg))} ${avg}`}</b></div>
+      </div>
+      {expected.length > 0 && (
+        <>
+          <h3 className="sec">Expected this month</h3>
+          {expected.map((o) => (
+            <div className={'exp' + (o.promisedOn < today ? ' late' : '')} key={o.id}>
+              <span>{o.person} · {fmtDate(o.promisedOn)}{o.promisedOn < today ? ' (past)' : ''}</span><b>{fmt(o.amount)}</b>
+            </div>
+          ))}
+        </>
+      )}
+      <h3 className="sec">Weeks</h3>
+      {weeks.map(({ key, s, r, debtPaid }) => {
         const st = weekStatus(s, now);
         return (
           <button key={key} className={'wk' + (key === cur ? ' sel' : '')} onClick={() => setCur(key)} aria-current={key === cur ? 'true' : undefined}>
@@ -296,6 +490,13 @@ function MonthPanel({ db, cur, setCur }) {
               })}
             </div>
             {s.b > 0 && <div className="wk-n">Budget {fmt(s.b)} · Spent {fmt(s.spent)}</div>}
+            {(r || debtPaid > 0) && (
+              <div className="wk-n">
+                {r && <span className="mstars" role="img" aria-label={`${r.stars} out of 5 stars`}>{starText(r.stars)}</span>}
+                {r && debtPaid > 0 && ' · '}
+                {debtPaid > 0 && `Paid ${fmt(debtPaid)} to debts`}
+              </div>
+            )}
           </button>
         );
       })}
@@ -344,6 +545,34 @@ export default function App() {
 
   const update = (fn) => setDb((d) => ({ ...d, weeks: { ...d.weeks, [cur]: fn(d.weeks[cur] || EMPTY) } }));
   const clear = () => confirm('Remove all expenses for this week?') && update((x) => ({ ...x, items: [] }));
+  const debtStats = useMemo(() => {
+    const t = {};
+    Object.values(db.weeks).forEach((w) => w.items.forEach((i) => {
+      if (i.debtId) { const e = (t[i.debtId] ||= { paid: 0, count: 0 }); e.paid += i.amt; e.count += 1; }
+    }));
+    return t;
+  }, [db.weeks]);
+  const debtRows = db.debts.map((d) => {
+    const st = debtStats[d.id] || { paid: 0, count: 0 };
+    return { ...d, paid: st.paid, count: st.count, left: Math.max(0, Math.round((d.amount - st.paid) * 100) / 100) };
+  });
+  const lenders = Object.fromEntries(db.debts.map((d) => [d.id, d.lender]));
+  const extra = { debts: debtRows, owed: db.owed };
+  const addDebt = (v) => setDb((x) => ({ ...x, debts: [...x.debts, { id: Date.now(), ...v }] }));
+  const editDebt = (id, v) => setDb((x) => ({ ...x, debts: x.debts.map((d) => (d.id === id ? { ...d, ...v } : d)) }));
+  const deleteDebt = (d) => {
+    const n = d.count ? ` Its ${d.count} payment${d.count === 1 ? '' : 's'} stay in your weekly budgets as regular expenses.` : '';
+    if (!confirm(`Delete the debt to ${d.lender}?${n}`)) return;
+    setDb((x) => ({
+      ...x,
+      debts: x.debts.filter((y) => y.id !== d.id),
+      weeks: Object.fromEntries(Object.entries(x.weeks).map(([k, w]) => [k, { ...w, items: w.items.map((i) => (i.debtId === d.id ? { ...i, debtId: undefined } : i)) }])),
+    }));
+  };
+  const addOwed = (v) => setDb((x) => ({ ...x, owed: [...x.owed, { id: Date.now(), paid: false, ...v }] }));
+  const editOwed = (id, v) => setDb((x) => ({ ...x, owed: x.owed.map((o) => (o.id === id ? { ...o, ...v } : o)) }));
+  const deleteOwed = (o) => confirm(`Delete ${o.person}’s ${fmt(o.amount)} from your list?`) && setDb((x) => ({ ...x, owed: x.owed.filter((y) => y.id !== o.id) }));
+
   const importWeek = (p) => {
     const old = db.weeks[p.key];
     if (old && (old.items.length || old.budget) && !confirm(`Replace what’s saved for week ${p.key}?`)) return false;
@@ -364,17 +593,20 @@ export default function App() {
         <WeekPicker cur={cur} setCur={setCur} s={s} />
         <section className="card"><BudgetInput cur={cur} rev={rev} defaultValue={w.budget} onChange={(v) => update((x) => ({ ...x, budget: v }))} /></section>
         <Summary s={s} cur={cur} />
-        <ExpenseForm cur={cur} s={s} onAdd={(it) => update((x) => ({ ...x, items: [...x.items, it] }))} />
+        <RatingCard s={s} debts={debtRows} />
+        <ExpenseForm cur={cur} s={s} debts={debtRows.filter((d) => d.left > 0)} onAdd={(it) => update((x) => ({ ...x, items: [...x.items, it] }))} />
         <div className="split">
-          <ExpenseList s={s} onDelete={(id) => update((x) => ({ ...x, items: x.items.filter((i) => i.id !== id) }))} />
+          <ExpenseList s={s} lenders={lenders} onDelete={(id) => update((x) => ({ ...x, items: x.items.filter((i) => i.id !== id) }))} />
           <Breakdown s={s} />
         </div>
-        <ExportCard s={s} cur={cur} />
-        <EmailCard email={db.email} setEmail={(v) => setDb((d) => ({ ...d, email: v }))} s={s} cur={cur} />
+        <DebtsCard rows={debtRows} onAdd={addDebt} onEdit={editDebt} onDelete={deleteDebt} />
+        <OwedCard list={db.owed} onAdd={addOwed} onEdit={editOwed} onDelete={deleteOwed} />
+        <ExportCard s={s} cur={cur} extra={extra} />
+        <EmailCard email={db.email} setEmail={(v) => setDb((d) => ({ ...d, email: v }))} s={s} cur={cur} extra={extra} />
         <ImportCard onLoad={importWeek} />
         <ThemePanel db={db} setDb={setDb} onClear={clear} />
         </main>
-        <aside className="side"><MonthPanel db={db} cur={cur} setCur={setCur} /></aside>
+        <aside className="side"><MonthPanel db={db} cur={cur} setCur={setCur} debtRows={debtRows} /></aside>
         </div>
       </div>
       <div className={'dock' + (over ? ' neg' : '')} aria-live="polite">
