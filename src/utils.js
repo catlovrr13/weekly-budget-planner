@@ -5,6 +5,13 @@ export const CATS = ['Food', 'Transport', 'Bills', 'Shopping', 'Health', 'Fun', 
 export const fmt = (n) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(n || 0);
 export const peso = (n) => '₱' + n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// Export and import scope: everything, just the week's expenses, or just the debt lists.
+export const SCOPES = [['all', 'Everything (expenses + debts)'], ['expenses', 'Expenses only'], ['debts', 'Debts only']];
+const SCOPE_WORDS = { all: 'expenses, debts', expenses: 'expenses only', debts: 'debts only' };
+const SUFFIX = { all: '', expenses: '-expenses', debts: '-debts' };
+export const hasExpenses = (scope) => scope !== 'debts';
+export const hasDebts = (scope) => scope !== 'expenses';
+
 export function weekKey(d) {
   const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
   const n = t.getUTCDay() || 7;
@@ -38,119 +45,160 @@ export function snap(w, key) {
   return { mon, b, items, spent, rem: b - spent, label: `${short(mon)} – ${short(end)}, ${end.getFullYear()}` };
 }
 
-export function txtReport(s, key, extra = {}) {
+export function txtReport(s, key, extra = {}, scope = 'all') {
   const { debts = [], owed = [] } = extra;
+  const wantEx = hasExpenses(scope), wantDebt = hasDebts(scope);
   const r = rateWeek(s, debts);
-  const L = ['WEEKLY BUDGET', `Week: ${s.label} (${key})`, ''];
-  L.push('Budget:    ' + peso(s.b), 'Spent:     ' + peso(s.spent), s.rem < 0 ? 'Over budget by: ' + peso(-s.rem) : 'Remaining: ' + peso(s.rem));
-  if (r) L.push(`Rating:    ${starText(r.stars)} ${r.label} (${r.score}/100)`);
-  L.push('', 'EXPENSES');
-  if (!s.items.length) L.push('(none added)');
-  DAYS.forEach((d, i) => {
-    const day = s.items.filter((x) => x.day === i);
-    if (!day.length) return;
-    L.push('', `${d}, ${dateOf(s.mon, i)}`);
-    day.forEach((x) => L.push(`  - ${x.name} [${x.cat}]: ${peso(x.amt)}`));
-    L.push('  Day total: ' + peso(day.reduce((a, c) => a + c.amt, 0)));
-  });
-  const g = group(s.items, 'cat');
-  if (g.length) { L.push('', 'BY CATEGORY'); g.forEach(([n, v]) => L.push('  ' + n.padEnd(12) + peso(v))); }
-  const weekPaid = (id) => s.items.filter((i) => i.debtId === id).reduce((a, i) => a + i.amt, 0);
-  L.push('', 'MONEY I OWE (balances as of export)');
-  if (!debts.length) L.push('  (none listed)');
-  debts.forEach((d) => { const w = weekPaid(d.id); L.push(`  - ${d.lender} (${d.purpose}): ${peso(d.left)} left of ${peso(d.amount)}${w ? ' | paid this week ' + peso(w) : ''}`); });
-  if (debts.length) L.push('  Total still owed: ' + peso(debts.reduce((a, d) => a + d.left, 0)));
-  L.push('', 'MONEY OWED TO ME');
-  if (!owed.length) L.push('  (none listed)');
-  owed.forEach((o) => L.push(`  - ${o.person}: ${peso(o.amount)} | borrowed ${fmtDate(o.borrowedOn)} | ${o.promisedOn ? 'promised ' + fmtDate(o.promisedOn) : 'no pay date given'}${o.paid ? ' | PAID BACK' : isLate(o) ? ' | PAST DUE' : ''}`));
-  if (owed.length) L.push('  Total still owed to me: ' + peso(owed.filter((o) => !o.paid).reduce((a, o) => a + o.amount, 0)));
-  L.push('', 'Total spent: ' + peso(s.spent), 'Exported: ' + new Date().toLocaleString('en-PH'));
+  const lenderOf = (id) => debts.find((d) => d.id === id)?.lender;
+  // The lender rides along in the brackets so an exported payment can find its debt again on import.
+  const tag = (x) => (x.debtId && lenderOf(x.debtId) ? `${x.cat} → ${lenderOf(x.debtId)}` : x.cat);
+  const L = ['WEEKLY BUDGET', `Week: ${s.label} (${key})`, `Includes: ${SCOPE_WORDS[scope]}`, ''];
+  if (wantEx) {
+    L.push('Budget:    ' + peso(s.b), 'Spent:     ' + peso(s.spent), s.rem < 0 ? 'Over budget by: ' + peso(-s.rem) : 'Remaining: ' + peso(s.rem));
+    if (r) L.push(`Rating:    ${starText(r.stars)} ${r.label} (${r.score}/100)`);
+    L.push('', 'EXPENSES');
+    if (!s.items.length) L.push('(none added)');
+    DAYS.forEach((d, i) => {
+      const day = s.items.filter((x) => x.day === i);
+      if (!day.length) return;
+      L.push('', `${d}, ${dateOf(s.mon, i)}`);
+      day.forEach((x) => L.push(`  - ${x.name} [${tag(x)}]: ${peso(x.amt)}`));
+      L.push('  Day total: ' + peso(day.reduce((a, c) => a + c.amt, 0)));
+    });
+    const g = group(s.items, 'cat');
+    if (g.length) { L.push('', 'BY CATEGORY'); g.forEach(([n, v]) => L.push('  ' + n.padEnd(12) + peso(v))); }
+  }
+  if (wantDebt) {
+    const weekPaid = (id) => s.items.filter((i) => i.debtId === id).reduce((a, i) => a + i.amt, 0);
+    L.push('', 'MONEY I OWE (balances as of export)');
+    if (!debts.length) L.push('  (none listed)');
+    debts.forEach((d) => {
+      const w = weekPaid(d.id);
+      L.push(`  - ${d.lender} (${d.purpose}): borrowed ${peso(d.amount)} | paid ${peso(d.paid)} | ${peso(d.left)} left${wantEx && w ? ' | paid this week ' + peso(w) : ''}`);
+    });
+    if (debts.length) L.push('  Total still owed: ' + peso(debts.reduce((a, d) => a + d.left, 0)));
+    L.push('', 'MONEY OWED TO ME');
+    if (!owed.length) L.push('  (none listed)');
+    owed.forEach((o) => L.push(`  - ${o.person}: ${peso(o.amount)} | borrowed ${o.borrowedOn} | ${o.promisedOn ? 'promised ' + o.promisedOn : 'no pay date given'}${o.paid ? ' | PAID BACK' : isLate(o) ? ' | PAST DUE' : ''}`));
+    if (owed.length) L.push('  Total still owed to me: ' + peso(owed.filter((o) => !o.paid).reduce((a, o) => a + o.amount, 0)));
+  }
+  L.push('');
+  if (wantEx) L.push('Total spent: ' + peso(s.spent));
+  L.push('Exported: ' + new Date().toLocaleString('en-PH'));
   return L.join('\r\n');
 }
 
-export function downloadTxt(s, key, extra) {
+export function downloadTxt(s, key, extra, scope = 'all') {
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([txtReport(s, key, extra)], { type: 'text/plain;charset=utf-8' }));
-  a.download = `budget-${key}.txt`;
+  a.href = URL.createObjectURL(new Blob([txtReport(s, key, extra, scope)], { type: 'text/plain;charset=utf-8' }));
+  a.download = `budget-${key}${SUFFIX[scope]}.txt`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
-export function downloadXlsx(s, key, extra = {}) {
-  const n = s.items.length, PESO = '"₱"#,##0.00', cats = group(s.items, 'cat'), { debts = [], owed = [] } = extra, r = rateWeek(s, debts);
-  const rows = [['Date', 'Day', 'Item', 'Category', 'Amount (PHP)']];
-  s.items.forEach((x) => rows.push([dateOf(s.mon, x.day), DAYS[x.day], x.name, x.cat, x.amt]));
-  rows.push([], ['', '', '', 'Total', s.spent]);
-  const ex = XLSX.utils.aoa_to_sheet(rows);
-  for (let r = 2; r <= n + 1; r++) ex['E' + r].z = PESO;
-  const tr = n + 3;
-  ex['E' + tr] = n ? { t: 'n', v: s.spent, f: `SUM(E2:E${n + 1})`, z: PESO } : { t: 'n', v: 0, z: PESO };
-  ex['!cols'] = [{ wch: 14 }, { wch: 7 }, { wch: 30 }, { wch: 14 }, { wch: 16 }];
-  const sm = XLSX.utils.aoa_to_sheet([
-    ['Weekly Budget'], ['Week', s.label], ['Rating', r ? `${starText(r.stars)} ${r.label} (${r.score}/100)` : 'Not rated yet'],
-    ['Budget (PHP)', s.b], ['Spent (PHP)', s.spent],
-    [s.rem < 0 ? 'Over budget by (PHP)' : 'Remaining (PHP)', Math.abs(s.rem)], [],
-    ['Category', 'Spent (PHP)'], ...cats,
-  ]);
-  sm.B4.z = PESO;
-  sm.B5 = { t: 'n', v: s.spent, f: n ? `SUM(Expenses!E2:E${n + 1})` : '0', z: PESO };
-  sm.B6 = { t: 'n', v: Math.abs(s.rem), f: 'ABS(B4-B5)', z: PESO };
-  cats.forEach((_, i) => (sm['B' + (9 + i)].z = PESO));
-  sm['!cols'] = [{ wch: 22 }, { wch: 26 }];
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, sm, 'Summary');
-  XLSX.utils.book_append_sheet(wb, ex, 'Expenses');
+export function downloadXlsx(s, key, extra = {}, scope = 'all') {
+  const PESO = '"₱"#,##0.00', { debts = [], owed = [] } = extra;
   const weekPaid = (id) => s.items.filter((i) => i.debtId === id).reduce((a, i) => a + i.amt, 0);
-  const dr = [['Lender', 'Purpose', 'Amount borrowed (PHP)', 'Paid so far (PHP)', 'Left (PHP)', 'Paid this week (PHP)']];
-  debts.forEach((d) => dr.push([d.lender, d.purpose, d.amount, d.paid, d.left, weekPaid(d.id)]));
-  const sums = [(d) => d.amount, (d) => d.paid, (d) => d.left, (d) => weekPaid(d.id)].map((f) => debts.reduce((a, d) => a + f(d), 0));
-  dr.push([], ['Total', '', ...sums]);
-  const dn = debts.length, dsh = XLSX.utils.aoa_to_sheet(dr), money = ['C', 'D', 'E', 'F'];
-  debts.forEach((_, i) => money.forEach((c) => (dsh[c + (i + 2)].z = PESO)));
-  money.forEach((c, i) => { dsh[c + (dn + 3)] = { t: 'n', v: sums[i], f: dn ? `SUM(${c}2:${c}${dn + 1})` : '0', z: PESO }; });
-  dsh['!cols'] = [{ wch: 22 }, { wch: 26 }, { wch: 20 }, { wch: 18 }, { wch: 14 }, { wch: 20 }];
-  const status = (o) => (o.paid ? 'Paid back' : isLate(o) ? 'Past due' : o.promisedOn ? 'Waiting' : 'Waiting (no pay date)');
-  const orows = [['Person', 'Amount (PHP)', 'Date borrowed', 'Promised pay date', 'Status']];
-  owed.forEach((o) => orows.push([o.person, o.amount, fmtDate(o.borrowedOn), o.promisedOn ? fmtDate(o.promisedOn) : '', status(o)]));
-  const on = owed.length, stillOwed = owed.filter((o) => !o.paid).reduce((a, o) => a + o.amount, 0);
-  orows.push([], ['Still owed to me', stillOwed]);
-  const osh = XLSX.utils.aoa_to_sheet(orows);
-  owed.forEach((_, i) => (osh['B' + (i + 2)].z = PESO));
-  osh['B' + (on + 3)] = { t: 'n', v: stillOwed, f: on ? `SUMIF(E2:E${on + 1},"<>Paid back",B2:B${on + 1})` : '0', z: PESO };
-  osh['!cols'] = [{ wch: 22 }, { wch: 16 }, { wch: 16 }, { wch: 20 }, { wch: 22 }];
-  XLSX.utils.book_append_sheet(wb, dsh, 'Debts I owe');
-  XLSX.utils.book_append_sheet(wb, osh, 'Owed to me');
-  XLSX.writeFile(wb, `budget-${key}.xlsx`);
+  const lenderOf = (id) => debts.find((d) => d.id === id)?.lender || '';
+  const wb = XLSX.utils.book_new();
+  if (hasExpenses(scope)) {
+    const n = s.items.length, cats = group(s.items, 'cat'), r = rateWeek(s, debts);
+    const rows = [['Date', 'Day', 'Item', 'Category', 'Amount (PHP)', 'Pays debt']];
+    s.items.forEach((x) => rows.push([dateOf(s.mon, x.day), DAYS[x.day], x.name, x.cat, x.amt, x.debtId ? lenderOf(x.debtId) : '']));
+    rows.push([], ['', '', '', 'Total', s.spent]);
+    const ex = XLSX.utils.aoa_to_sheet(rows);
+    for (let i = 2; i <= n + 1; i++) ex['E' + i].z = PESO;
+    const tr = n + 3;
+    ex['E' + tr] = n ? { t: 'n', v: s.spent, f: `SUM(E2:E${n + 1})`, z: PESO } : { t: 'n', v: 0, z: PESO };
+    ex['!cols'] = [{ wch: 14 }, { wch: 7 }, { wch: 30 }, { wch: 14 }, { wch: 16 }, { wch: 20 }];
+    const sm = XLSX.utils.aoa_to_sheet([
+      ['Weekly Budget'], ['Week', s.label], ['Rating', r ? `${starText(r.stars)} ${r.label} (${r.score}/100)` : 'Not rated yet'],
+      ['Budget (PHP)', s.b], ['Spent (PHP)', s.spent],
+      [s.rem < 0 ? 'Over budget by (PHP)' : 'Remaining (PHP)', Math.abs(s.rem)], [],
+      ['Category', 'Spent (PHP)'], ...cats,
+    ]);
+    sm.B4.z = PESO;
+    sm.B5 = { t: 'n', v: s.spent, f: n ? `SUM(Expenses!E2:E${n + 1})` : '0', z: PESO };
+    sm.B6 = { t: 'n', v: Math.abs(s.rem), f: 'ABS(B4-B5)', z: PESO };
+    cats.forEach((_, i) => (sm['B' + (9 + i)].z = PESO));
+    sm['!cols'] = [{ wch: 22 }, { wch: 26 }];
+    XLSX.utils.book_append_sheet(wb, sm, 'Summary');
+    XLSX.utils.book_append_sheet(wb, ex, 'Expenses');
+  }
+  if (hasDebts(scope)) {
+    const dr = [['Lender', 'Purpose', 'Amount borrowed (PHP)', 'Paid so far (PHP)', 'Left (PHP)', 'Paid this week (PHP)']];
+    debts.forEach((d) => dr.push([d.lender, d.purpose, d.amount, d.paid, d.left, weekPaid(d.id)]));
+    const sums = [(d) => d.amount, (d) => d.paid, (d) => d.left, (d) => weekPaid(d.id)].map((f) => debts.reduce((a, d) => a + f(d), 0));
+    dr.push([], ['Total', '', ...sums]);
+    const dn = debts.length, dsh = XLSX.utils.aoa_to_sheet(dr), money = ['C', 'D', 'E', 'F'];
+    debts.forEach((_, i) => money.forEach((c) => (dsh[c + (i + 2)].z = PESO)));
+    money.forEach((c, i) => { dsh[c + (dn + 3)] = { t: 'n', v: sums[i], f: dn ? `SUM(${c}2:${c}${dn + 1})` : '0', z: PESO }; });
+    dsh['!cols'] = [{ wch: 22 }, { wch: 26 }, { wch: 20 }, { wch: 18 }, { wch: 14 }, { wch: 20 }];
+    const status = (o) => (o.paid ? 'Paid back' : isLate(o) ? 'Past due' : o.promisedOn ? 'Waiting' : 'Waiting (no pay date)');
+    const orows = [['Person', 'Amount (PHP)', 'Date borrowed', 'Promised pay date', 'Status']];
+    owed.forEach((o) => orows.push([o.person, o.amount, fmtDate(o.borrowedOn), o.promisedOn ? fmtDate(o.promisedOn) : '', status(o)]));
+    const on = owed.length, stillOwed = owed.filter((o) => !o.paid).reduce((a, o) => a + o.amount, 0);
+    orows.push([], ['Still owed to me', stillOwed]);
+    const osh = XLSX.utils.aoa_to_sheet(orows);
+    owed.forEach((_, i) => (osh['B' + (i + 2)].z = PESO));
+    osh['B' + (on + 3)] = { t: 'n', v: stillOwed, f: on ? `SUMIF(E2:E${on + 1},"<>Paid back",B2:B${on + 1})` : '0', z: PESO };
+    osh['!cols'] = [{ wch: 22 }, { wch: 16 }, { wch: 16 }, { wch: 20 }, { wch: 22 }];
+    XLSX.utils.book_append_sheet(wb, dsh, 'Debts I owe');
+    XLSX.utils.book_append_sheet(wb, osh, 'Owed to me');
+  }
+  XLSX.writeFile(wb, `budget-${key}${SUFFIX[scope]}.xlsx`);
 }
 
-// Reads a .txt report exported by this app back into { key, budget, items }.
+const num = (str) => parseFloat(String(str ?? '0').replace(/,/g, '')) || 0;
+
+// Reads a .txt report exported by this app back into
+// { key, budget, items, debts, owed, has: { expenses, debts } }.
 // Returns null when the text isn't one of our reports.
 export function parseReport(text) {
   const key = text.match(/^Week:.*\((\d{4}-W\d{2})\)/m)?.[1];
   const wk = key ? +key.slice(-2) : 0;
   if (!key || wk < 1 || wk > 53) return null;
-  const budget = parseFloat((text.match(/^Budget:\s*₱?\s*([\d,]+(?:\.\d+)?)/m)?.[1] || '0').replace(/,/g, '')) || 0;
-  const items = [];
-  let day = 0;
-  let stop = false;
+  const budget = num(text.match(/^Budget:\s*₱?\s*([\d,]+(?:\.\d+)?)/m)?.[1]);
+  const items = [], debts = [], owed = [];
+  let day = 0, sec = 'head';
   text.split(/\r?\n/).forEach((line) => {
-    if (line.startsWith('MONEY I OWE')) stop = true;
-    if (stop) return;
-    const d = DAYS.indexOf(line.slice(0, 3));
-    if (d >= 0 && line[3] === ',') { day = d; return; }
-    const m = line.match(/^\s*-\s+(.+?)\s+\[([^\]]+)\]:\s*₱?\s*([\d,]+(?:\.\d+)?)\s*$/);
-    if (!m) return;
-    const amt = parseFloat(m[3].replace(/,/g, ''));
-    if (amt > 0) items.push({ id: Date.now() + items.length, name: m[1].slice(0, 60), cat: CATS.includes(m[2]) ? m[2] : 'Other', amt, day });
+    if (/^EXPENSES\b/.test(line)) { sec = 'ex'; return; }
+    if (/^BY CATEGORY\b/.test(line)) { sec = 'cat'; return; }
+    if (/^MONEY I OWE\b/.test(line)) { sec = 'debt'; return; }
+    if (/^MONEY OWED TO ME\b/.test(line)) { sec = 'owed'; return; }
+    if (sec === 'ex') {
+      const d = DAYS.indexOf(line.slice(0, 3));
+      if (d >= 0 && line[3] === ',') { day = d; return; }
+      const m = line.match(/^\s*-\s+(.+?)\s+\[([^\]]+)\]:\s*₱?\s*([\d,]+(?:\.\d+)?)\s*$/);
+      if (!m) return;
+      const amt = num(m[3]), arrow = m[2].indexOf('→');
+      const cat = (arrow < 0 ? m[2] : m[2].slice(0, arrow)).trim();
+      const lender = arrow < 0 ? '' : m[2].slice(arrow + 1).trim();
+      if (amt > 0) items.push({ name: m[1].slice(0, 60), cat: CATS.includes(cat) ? cat : 'Other', amt, day, lender });
+    } else if (sec === 'debt') {
+      // Current format first, then the older "₱x left of ₱y" one.
+      const m = line.match(/^\s*-\s+(.+?)\s+\((.*?)\):\s*borrowed\s*₱?\s*([\d,]+(?:\.\d+)?)/)
+        || line.match(/^\s*-\s+(.+?)\s+\((.*?)\):\s*₱?\s*[\d,.]+\s*left of\s*₱?\s*([\d,]+(?:\.\d+)?)/);
+      if (m && num(m[3]) > 0) debts.push({ lender: m[1].slice(0, 60), purpose: m[2].slice(0, 80), amount: num(m[3]) });
+    } else if (sec === 'owed') {
+      const m = line.match(/^\s*-\s+(.+?):\s*₱?\s*([\d,]+(?:\.\d+)?)\s*\|\s*borrowed\s*(\d{4}-\d{2}-\d{2})(?:\s*\|\s*promised\s*(\d{4}-\d{2}-\d{2}))?/);
+      if (m && num(m[2]) > 0) owed.push({ person: m[1].slice(0, 60), amount: num(m[2]), borrowedOn: m[3], promisedOn: m[4] || '', paid: /\|\s*PAID BACK/.test(line) });
+    }
   });
-  return { key, budget, items };
+  const inc = text.match(/^Includes:\s*(.+)$/m)?.[1] || '';
+  const has = {
+    // Reports made before scopes existed have no "Includes" line but always carry both sections.
+    expenses: inc ? /expenses/i.test(inc) : /^EXPENSES\b/m.test(text),
+    debts: (inc ? /debts/i.test(inc) : /^MONEY I OWE\b/m.test(text)) && !!(debts.length || owed.length),
+  };
+  return { key, budget, items, debts, owed, has };
 }
 
-// Builds a mailto: link with the weekly report as the message body.
+// Builds a mailto: link with the report as the message body.
 // Mail apps cap link length, so a long report is trimmed (the .txt download always has everything).
-export function mailtoLink(to, s, key, extra) {
-  const subject = `Weekly Budget: ${s.label}`;
-  let body = txtReport(s, key, extra);
+export function mailtoLink(to, s, key, extra, scope = 'all') {
+  const subject = scope === 'debts' ? 'My debts and loans' : `Weekly Budget: ${s.label}`;
+  let body = txtReport(s, key, extra, scope);
   let trimmed = false;
   while (encodeURIComponent(body).length > 1700) {
     trimmed = true;

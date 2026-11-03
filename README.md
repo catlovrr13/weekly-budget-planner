@@ -4,16 +4,21 @@ A soft pink weekly budget tracker built with React and Vite. Pick a week, set yo
 
 ## Features
 
+- **Four tabs:** Expenses, Debt, Monthly and Backup, so each part of the app is one short screen instead of one long scroll.
 - **Week calendar:** choose any week of the year, or jump with Prev, Next and This week. Each week keeps its own budget and expenses.
 - **Live budget:** every expense you add or delete instantly updates Budget, Spent and Remaining.
 - **Over-budget alert:** the bar and summary turn red and show "Over budget by ₱X" when you exceed your budget.
 - **Add-expense preview:** while you type an amount, see what you'd have left (or how far over you'd go) before you add it.
 - **Expense details:** each expense has a name, amount, category and day of the week.
 - **Breakdowns:** spending by category and day by day, plus a suggested daily spend for the days left in the week.
-- **Export:** download any week as a `.txt` report or an Excel `.xlsx` file (Summary and Expenses sheets, with formulas).
+- **Weekly rating:** a 1–5 star score out of 100 for how the week went, with the reasons behind it.
+- **Debt tracking:** list what you owe and what people owe you. Paying a debt is an expense tagged with the debt, so balances follow your weekly spending.
+- **Monthly summary:** every week of a month at a glance, with leftovers, overspending, debt payments and expected repayments. Tap a week to open it.
+- **Export, whole or partial:** download everything (expenses **and** debts), expenses only, or debts only, as a `.txt` report or an Excel `.xlsx` file with formulas.
+- **Import, whole or partial:** open a `.txt` file to read it; if it's a report from this app, load back everything in it, just the expenses, or just the debt lists.
+- **Email or copy:** send the same selection to yourself through your email app, or copy it as text.
 - **Customizable theme:** pick a preset pink or any custom color, and choose light, dark or match-my-device mode.
 - **Mobile friendly:** large tap targets and a pinned Remaining bar at the bottom of the screen on phones.
-- **Import:** open a .txt file to read it, or load a report exported from this app back into its week
 
 ## Tech stack
 
@@ -53,19 +58,25 @@ Then open http://localhost:5173 in your browser.
 ├── vite.config.js
 └── src/
     ├── main.jsx        # React entry point
-    ├── App.jsx         # App state and all UI components
-    ├── utils.js        # Week math, currency formatting, .txt and .xlsx export
-    └── styles.css      # Pink theme, layout and mobile styles
+    ├── App.jsx         # App state, the four tabs and all UI components
+    ├── utils.js        # Week math, currency formatting, rating, scoped .txt/.xlsx export and .txt import
+    └── styles.css      # Pink theme, tabs, layout and mobile styles
 ```
 
 ## How to use
+
+On the **Expenses** tab:
 
 1. **Choose a week** with the calendar, or use Prev, Next and This week.
 2. **Enter your budget** for that week in pesos.
 3. **Add expenses** with a name, amount, category and day. Press Enter or tap Add expense.
 4. **Watch the summary.** Remaining goes down with each expense. If you pass your budget, the amount you're over is shown in red.
-5. **Export** the week as `.txt` or Excel from the Export card.
-6. **Customize** the accent color and light or dark mode from the "Make it yours" card.
+
+On the **Debt** tab, list what you borrowed and what people owe you. To pay a debt down, go back to Expenses, add the payment and pick the debt under "This pays off a debt" — the balance drops on its own, and goes back up if you delete that expense.
+
+On the **Monthly** tab, step through months to see how each week went, and tap a week to open it.
+
+On the **Backup** tab, pick what to include — everything, expenses only or debts only — then download it, email it, or load a `.txt` report back in. Theme and "Clear this week" live here too.
 
 ## Customizing the theme
 

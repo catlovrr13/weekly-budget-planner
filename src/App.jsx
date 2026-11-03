@@ -1,17 +1,38 @@
 import { useState, useEffect, useMemo } from 'react';
-import { DAYS, CATS, fmt, weekKey, addDays, short, group, snap, downloadTxt, downloadXlsx, parseReport, txtReport, mailtoLink, monthOfWeek, weekKeysOfMonth, fmtDate, todayStr, rateWeek, starsFor, starText } from './utils.js';
+import { DAYS, CATS, SCOPES, hasExpenses, hasDebts, fmt, weekKey, addDays, short, group, snap, downloadTxt, downloadXlsx, parseReport, txtReport, mailtoLink, monthOfWeek, weekKeysOfMonth, fmtDate, todayStr, rateWeek, starsFor, starText } from './utils.js';
 
 const KEY = 'pinkBudgetReactV1';
 const SWATCHES = [['Blush', '#f4a6bd'], ['Rose', '#ee86a5'], ['Peach pink', '#f8b4b0'], ['Mauve', '#d9a0c0'], ['Petal', '#fbc8d8']];
 const EMPTY = { budget: 0, items: [] };
 const DEFAULTS = { weeks: {}, accent: '#f4a6bd', mode: 'auto', email: '', debts: [], owed: [] };
+const TABS = [['expenses', 'Expenses'], ['debt', 'Debt'], ['month', 'Monthly'], ['data', 'Backup']];
 
 function load() {
   try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) || '{}') }; }
   catch { return DEFAULTS; }
 }
 
-function WeekPicker({ cur, setCur, s }) {
+function Tabs({ tab, setTab }) {
+  const move = (e) => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    e.preventDefault();
+    const i = TABS.findIndex(([id]) => id === tab);
+    const [next] = TABS[(i + (e.key === 'ArrowRight' ? 1 : TABS.length - 1)) % TABS.length];
+    setTab(next);
+    document.getElementById('tab-' + next)?.focus();
+  };
+  return (
+    <div className="tabs" role="tablist" aria-label="Sections" onKeyDown={move}>
+      {TABS.map(([id, label]) => (
+        <button key={id} id={'tab-' + id} className={'tab' + (tab === id ? ' on' : '')} role="tab"
+          aria-selected={tab === id} aria-controls={'panel-' + id} tabIndex={tab === id ? 0 : -1}
+          onClick={() => setTab(id)}>{label}</button>
+      ))}
+    </div>
+  );
+}
+
+function WeekPicker({ cur, setCur, s, rev, budget, onBudget }) {
   const go = (n) => setCur(weekKey(addDays(s.mon, n * 7)));
   return (
     <section className="card" aria-label="Week and budget">
@@ -25,20 +46,15 @@ function WeekPicker({ cur, setCur, s }) {
         <button className="btn ghost" onClick={() => setCur(weekKey(new Date()))}>This week</button>
       </div>
       <p className="range">{s.label}</p>
-    </section>
-  );
-}
-
-function BudgetInput({ cur, rev, defaultValue, onChange }) {
-  return (
-    <div className="row" style={{ marginTop: 12 }}>
-      <div className="f">
-        <label htmlFor="budget">Budget for this week (₱)</label>
-        {/* key resets the field when the week changes; uncontrolled so decimals type naturally */}
-        <input key={`${cur}:${rev}`} id="budget" type="number" min="0" step="0.01" inputMode="decimal" placeholder="e.g. 3,500"
-          defaultValue={defaultValue || ''} onChange={(e) => onChange(Math.max(0, parseFloat(e.target.value) || 0))} />
+      <div className="row" style={{ marginTop: 12 }}>
+        <div className="f">
+          <label htmlFor="budget">Budget for this week (₱)</label>
+          {/* key resets the field when the week changes; uncontrolled so decimals type naturally */}
+          <input key={`${cur}:${rev}`} id="budget" type="number" min="0" step="0.01" inputMode="decimal" placeholder="e.g. 3,500"
+            defaultValue={budget || ''} onChange={(e) => onBudget(Math.max(0, parseFloat(e.target.value) || 0))} />
+        </div>
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -176,38 +192,54 @@ function Breakdown({ s }) {
   );
 }
 
-function ExportCard({ s, cur, extra }) {
+function ScopeField({ id, value, onChange }) {
+  return (
+    <div className="f" style={{ flex: '1 1 220px' }}>
+      <label htmlFor={id}>What to include</label>
+      <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
+        {SCOPES.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+      </select>
+    </div>
+  );
+}
+
+function ExportCard({ s, cur, extra, scope, setScope }) {
+  const what = hasExpenses(scope)
+    ? (hasDebts(scope) ? 'this week’s budget and expenses, plus both debt lists' : 'this week’s budget, summary and every expense')
+    : 'what you owe and what people owe you';
   return (
     <section className="card" aria-label="Export">
-      <h2>Export this week</h2>
-      <p className="sub" style={{ marginBottom: 12 }}>Save the budget, summary and every expense for the week you’re viewing.</p>
+      <h2>Export</h2>
+      <p className="sub" style={{ marginBottom: 12 }}>Saves {what}.</p>
       <div className="row">
-        <button className="btn" onClick={() => downloadTxt(s, cur, extra)}>Download .txt</button>
-        <button className="btn" onClick={() => downloadXlsx(s, cur, extra)}>Download Excel (.xlsx)</button>
+        <ScopeField id="exscope" value={scope} onChange={setScope} />
+        <button className="btn" onClick={() => downloadTxt(s, cur, extra, scope)}>Download .txt</button>
+        <button className="btn" onClick={() => downloadXlsx(s, cur, extra, scope)}>Download Excel (.xlsx)</button>
       </div>
+      <p className="hint">The .txt can be loaded back in below. The .xlsx is for reading in Excel.</p>
     </section>
   );
 }
 
-function EmailCard({ email, setEmail, s, cur, extra }) {
+function EmailCard({ email, setEmail, s, cur, extra, scope }) {
   const [msg, setMsg] = useState('');
   const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 
   const send = () => {
     if (!valid) { setMsg('Enter a valid email address first.'); document.getElementById('email')?.focus(); return; }
-    const { href, trimmed } = mailtoLink(email.trim(), s, cur, extra);
+    const { href, trimmed } = mailtoLink(email.trim(), s, cur, extra, scope);
     setMsg(trimmed ? 'Your email app should open. The message was shortened to fit, so use Download .txt for the full report.' : 'Your email app should open with the summary ready to send.');
     window.location.href = href;
   };
   const copy = async () => {
-    try { await navigator.clipboard.writeText(txtReport(s, cur, extra)); setMsg('Summary copied. Paste it anywhere.'); }
+    try { await navigator.clipboard.writeText(txtReport(s, cur, extra, scope)); setMsg('Summary copied. Paste it anywhere.'); }
     catch { setMsg('Couldn’t copy here. Try Download .txt instead.'); }
   };
 
   return (
     <section className="card" aria-label="Email summary">
-      <h2>Email this week’s summary</h2>
-      <p className="sub" style={{ marginBottom: 12 }}>Opens your email app with the summary filled in. Just press send.</p>
+      <h2>Email or copy</h2>
+      <p className="sub" style={{ marginBottom: 12 }}>Sends the same thing you picked above. Opens your email app with it filled in.</p>
       <div className="row">
         <div className="f" style={{ flex: '2 1 220px' }}>
           <label htmlFor="email">Your email address</label>
@@ -225,7 +257,7 @@ function ImportCard({ onLoad }) {
   const [file, setFile] = useState(null);
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState('');
-  const parsed = useMemo(() => (file ? parseReport(file.text) : null), [file]);
+  const p = useMemo(() => (file ? parseReport(file.text) : null), [file]);
 
   const pick = async (e) => {
     const f = e.target.files[0];
@@ -237,12 +269,27 @@ function ImportCard({ onLoad }) {
     try { setFile({ name: f.name, text: await f.text() }); setErr(''); }
     catch { setFile(null); setErr('Couldn’t read that file. Please try again.'); }
   };
-  const load = () => onLoad(parsed) && setMsg(`Loaded ${parsed.items.length} expense${parsed.items.length === 1 ? '' : 's'} into week ${parsed.key}.`);
+
+  const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  const inside = p && [
+    p.has.expenses ? count(p.items.length, 'expense', 'expenses') + ` in week ${p.key}` : null,
+    p.has.debts ? count(p.debts.length, 'debt', 'debts') + ' you owe' : null,
+    p.has.debts ? count(p.owed.length, 'person', 'people') + ' who owe you' : null,
+  ].filter(Boolean).join(', ');
+
+  const run = (scope) => {
+    if (!onLoad(p, scope)) return;
+    const done = [
+      hasExpenses(scope) ? `${count(p.items.length, 'expense', 'expenses')} into week ${p.key}` : null,
+      hasDebts(scope) ? 'your debt lists' : null,
+    ].filter(Boolean).join(' and ');
+    setMsg(`Loaded ${done}.`);
+  };
 
   return (
     <section className="card" aria-label="Import">
       <h2>Import a .txt file</h2>
-      <p className="sub" style={{ marginBottom: 12 }}>Open a .txt file to read its contents. If it’s a report exported from this app, you can load it back into its week.</p>
+      <p className="sub" style={{ marginBottom: 12 }}>Open a .txt file to read it. If it’s a report from this app, you can load back everything in it, or just the part you need.</p>
       <label htmlFor="txtfile">Choose a .txt file</label>
       <input id="txtfile" type="file" accept=".txt,text/plain" onChange={pick} />
       {err && <div className="preview bad" role="alert">{err}</div>}
@@ -250,13 +297,15 @@ function ImportCard({ onLoad }) {
         <>
           <h3 className="fname">{file.name}</h3>
           <div className="ok" style={{ marginTop: 4 }}>
-            {parsed
-              ? `This is a Weekly Budget report: week ${parsed.key}, budget ${fmt(parsed.budget)}, ${parsed.items.length} expense${parsed.items.length === 1 ? '' : 's'}.`
+            {p
+              ? `This is a Weekly Budget report: ${inside || 'nothing that can be loaded'}.`
               : 'This isn’t a Weekly Budget report, so you can read it here but not load it.'}
           </div>
           <pre className="txtview" tabIndex={0}>{file.text || '(This file is empty.)'}</pre>
           <div className="row">
-            {parsed && <button className="btn" onClick={load}>Load into week {parsed.key}</button>}
+            {p?.has.expenses && p?.has.debts && <button className="btn" onClick={() => run('all')}>Load everything</button>}
+            {p?.has.expenses && <button className="btn ghost" onClick={() => run('expenses')}>Load expenses only</button>}
+            {p?.has.debts && <button className="btn ghost" onClick={() => run('debts')}>Load debts only</button>}
             <button className="btn ghost" onClick={() => { setFile(null); setMsg(''); }}>Close</button>
           </div>
           {msg && <div className="preview" role="status">{msg}</div>}
@@ -321,7 +370,7 @@ function DebtsCard({ rows, onAdd, onEdit, onDelete }) {
           </li>
         ))}
       </ul>
-      <p className="hint">To pay a debt down, add an expense above and pick the debt under “This pays off a debt.” Its balance drops automatically, and goes back up if you delete that expense.</p>
+      <p className="hint">To pay a debt down, add an expense on the Expenses tab and pick the debt under “This pays off a debt.” Its balance drops automatically, and goes back up if you delete that expense.</p>
     </section>
   );
 }
@@ -424,11 +473,12 @@ function RatingCard({ s, debts }) {
   );
 }
 
-function MonthPanel({ db, cur, setCur, debtRows }) {
+function MonthPanel({ db, cur, openWeek }) {
   const [m, setM] = useState(() => monthOfWeek(cur));
   useEffect(() => setM(monthOfWeek(cur)), [cur]);
   const shift = (n) => setM(({ y, mo }) => { const d = new Date(y, mo + n, 1); return { y: d.getFullYear(), mo: d.getMonth() }; });
   const now = new Date(), today = todayStr();
+  const debtRows = db.debtRows;
   const weeks = weekKeysOfMonth(m.y, m.mo).map((key) => {
     const s = snap(db.weeks[key] || EMPTY, key);
     return { key, s, r: rateWeek(s, debtRows), debtPaid: s.items.filter((i) => i.debtId).reduce((a, i) => a + i.amt, 0) };
@@ -457,7 +507,7 @@ function MonthPanel({ db, cur, setCur, debtRows }) {
       <div className="mstats">
         <div className="mstat good"><small>Left from past weeks</small><b>{fmt(leftPast)}</b></div>
         <div className={'mstat' + (overTotal > 0 ? ' over' : '')}><small>Went over by</small><b>{fmt(overTotal)}</b></div>
-        <div className="mstat" style={{ gridColumn: '1 / -1' }}><small>Weeks within budget</small><b>{started.length ? `${onTrack} of ${started.length}` : 'No weeks tracked yet'}</b></div>
+        <div className="mstat"><small>Weeks within budget</small><b>{started.length ? `${onTrack} of ${started.length}` : 'None tracked yet'}</b></div>
       </div>
       <h3 className="sec">Debts and loans</h3>
       <div className="mstats">
@@ -477,30 +527,32 @@ function MonthPanel({ db, cur, setCur, debtRows }) {
         </>
       )}
       <h3 className="sec">Weeks</h3>
-      {weeks.map(({ key, s, r, debtPaid }) => {
-        const st = weekStatus(s, now);
-        return (
-          <button key={key} className={'wk' + (key === cur ? ' sel' : '')} onClick={() => setCur(key)} aria-current={key === cur ? 'true' : undefined}>
-            <div className="wk-h"><b>{short(s.mon)} – {short(addDays(s.mon, 6))}</b><span className={'chip ' + st.cls}>{st.text}</span></div>
-            <div className="strip">
-              {DAYS.map((d, i) => {
-                const day = addDays(s.mon, i);
-                const cls = 'dy' + (day.getMonth() !== m.mo ? ' out' : '') + (day.toDateString() === now.toDateString() ? ' today' : '');
-                return <span key={d} className={cls}>{day.getDate()}{s.items.some((x) => x.day === i) && <i />}</span>;
-              })}
-            </div>
-            {s.b > 0 && <div className="wk-n">Budget {fmt(s.b)} · Spent {fmt(s.spent)}</div>}
-            {(r || debtPaid > 0) && (
-              <div className="wk-n">
-                {r && <span className="mstars" role="img" aria-label={`${r.stars} out of 5 stars`}>{starText(r.stars)}</span>}
-                {r && debtPaid > 0 && ' · '}
-                {debtPaid > 0 && `Paid ${fmt(debtPaid)} to debts`}
+      <div className="wklist">
+        {weeks.map(({ key, s, r, debtPaid }) => {
+          const st = weekStatus(s, now);
+          return (
+            <button key={key} className={'wk' + (key === cur ? ' sel' : '')} onClick={() => openWeek(key)} aria-current={key === cur ? 'true' : undefined}>
+              <div className="wk-h"><b>{short(s.mon)} – {short(addDays(s.mon, 6))}</b><span className={'chip ' + st.cls}>{st.text}</span></div>
+              <div className="strip">
+                {DAYS.map((d, i) => {
+                  const day = addDays(s.mon, i);
+                  const cls = 'dy' + (day.getMonth() !== m.mo ? ' out' : '') + (day.toDateString() === now.toDateString() ? ' today' : '');
+                  return <span key={d} className={cls}>{day.getDate()}{s.items.some((x) => x.day === i) && <i />}</span>;
+                })}
               </div>
-            )}
-          </button>
-        );
-      })}
-      <p className="cap">Tap a week to open it. Dots mark days with expenses. Weeks are grouped by the month their Thursday falls in.</p>
+              {s.b > 0 && <div className="wk-n">Budget {fmt(s.b)} · Spent {fmt(s.spent)}</div>}
+              {(r || debtPaid > 0) && (
+                <div className="wk-n">
+                  {r && <span className="mstars" role="img" aria-label={`${r.stars} out of 5 stars`}>{starText(r.stars)}</span>}
+                  {r && debtPaid > 0 && ' · '}
+                  {debtPaid > 0 && `Paid ${fmt(debtPaid)} to debts`}
+                </div>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      <p className="cap">Tap a week to open it on the Expenses tab. Dots mark days with expenses. Weeks are grouped by the month their Thursday falls in.</p>
     </section>
   );
 }
@@ -533,6 +585,8 @@ export default function App() {
   const [db, setDb] = useState(load);
   const [cur, setCur] = useState(() => weekKey(new Date()));
   const [rev, setRev] = useState(0);
+  const [tab, setTab] = useState('expenses');
+  const [scope, setScope] = useState('all');
   const w = db.weeks[cur] || EMPTY;
   const s = snap(w, cur);
 
@@ -542,6 +596,7 @@ export default function App() {
     r.style.setProperty('--accent', db.accent);
     db.mode === 'auto' ? r.removeAttribute('data-theme') : r.setAttribute('data-theme', db.mode);
   }, [db.accent, db.mode]);
+  useEffect(() => { window.scrollTo({ top: 0 }); }, [tab]);
 
   const update = (fn) => setDb((d) => ({ ...d, weeks: { ...d.weeks, [cur]: fn(d.weeks[cur] || EMPTY) } }));
   const clear = () => confirm('Remove all expenses for this week?') && update((x) => ({ ...x, items: [] }));
@@ -573,13 +628,43 @@ export default function App() {
   const editOwed = (id, v) => setDb((x) => ({ ...x, owed: x.owed.map((o) => (o.id === id ? { ...o, ...v } : o)) }));
   const deleteOwed = (o) => confirm(`Delete ${o.person}’s ${fmt(o.amount)} from your list?`) && setDb((x) => ({ ...x, owed: x.owed.filter((y) => y.id !== o.id) }));
 
-  const importWeek = (p) => {
+  // Loads a parsed .txt report back in: the whole thing, or only expenses, or only the debt lists.
+  const importData = (p, loadScope) => {
+    const wantEx = hasExpenses(loadScope), wantDebt = hasDebts(loadScope);
     const old = db.weeks[p.key];
-    if (old && (old.items.length || old.budget) && !confirm(`Replace what’s saved for week ${p.key}?`)) return false;
-    setDb((d) => ({ ...d, weeks: { ...d.weeks, [p.key]: { budget: p.budget, items: p.items } } }));
-    setCur(p.key);
-    setRev((r) => r + 1);
+    if (wantEx && old && (old.items.length || old.budget) && !confirm(`Replace what’s saved for week ${p.key}?`)) return false;
+    if (wantDebt && (db.debts.length || db.owed.length)
+      && !confirm(`Replace your saved debts (${db.debts.length}) and the ${db.owed.length} people who owe you with the lists in this file?`)) return false;
+    const base = Date.now();
+    setDb((d) => {
+      const next = { ...d };
+      if (wantDebt) {
+        next.debts = p.debts.map((x, i) => ({ id: base + i, lender: x.lender, purpose: x.purpose, amount: x.amount }));
+        next.owed = p.owed.map((o, i) => ({ id: base + 500 + i, ...o }));
+      }
+      if (wantEx) {
+        // Payments reconnect to their debt by lender name, since ids are reassigned on import.
+        const byLender = Object.fromEntries((wantDebt ? next.debts : d.debts).map((x) => [x.lender, x.id]));
+        const items = p.items.map((it, i) => {
+          const debtId = it.lender ? byLender[it.lender] : undefined;
+          return { id: base + 1000 + i, name: it.name, cat: it.cat, amt: it.amt, day: it.day, ...(debtId ? { debtId } : {}) };
+        });
+        next.weeks = { ...d.weeks, [p.key]: { budget: p.budget, items } };
+      }
+      return next;
+    });
+    if (wantEx) { setCur(p.key); setRev((r) => r + 1); }
     return true;
+  };
+
+  const openWeek = (key) => { setCur(key); setTab('expenses'); };
+  const jumpToAdd = () => {
+    setTab('expenses');
+    setTimeout(() => {
+      const el = document.getElementById('name');
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setTimeout(() => el?.focus(), 350);
+    }, 0);
   };
   const over = s.rem < 0;
 
@@ -588,30 +673,40 @@ export default function App() {
       <div className="wrap">
         <h1>Weekly Budget Planner</h1>
         <p className="sub">Pick a week, set your budget, and watch it update with every expense you add.</p>
-        <div className="layout">
-        <main>
-        <WeekPicker cur={cur} setCur={setCur} s={s} />
-        <section className="card"><BudgetInput cur={cur} rev={rev} defaultValue={w.budget} onChange={(v) => update((x) => ({ ...x, budget: v }))} /></section>
-        <Summary s={s} cur={cur} />
-        <RatingCard s={s} debts={debtRows} />
-        <ExpenseForm cur={cur} s={s} debts={debtRows.filter((d) => d.left > 0)} onAdd={(it) => update((x) => ({ ...x, items: [...x.items, it] }))} />
-        <div className="split">
-          <ExpenseList s={s} lenders={lenders} onDelete={(id) => update((x) => ({ ...x, items: x.items.filter((i) => i.id !== id) }))} />
-          <Breakdown s={s} />
-        </div>
-        <DebtsCard rows={debtRows} onAdd={addDebt} onEdit={editDebt} onDelete={deleteDebt} />
-        <OwedCard list={db.owed} onAdd={addOwed} onEdit={editOwed} onDelete={deleteOwed} />
-        <ExportCard s={s} cur={cur} extra={extra} />
-        <EmailCard email={db.email} setEmail={(v) => setDb((d) => ({ ...d, email: v }))} s={s} cur={cur} extra={extra} />
-        <ImportCard onLoad={importWeek} />
-        <ThemePanel db={db} setDb={setDb} onClear={clear} />
+        <Tabs tab={tab} setTab={setTab} />
+        <main id={'panel-' + tab} role="tabpanel" aria-labelledby={'tab-' + tab} tabIndex={-1}>
+          {tab === 'expenses' && (
+            <>
+              <WeekPicker cur={cur} setCur={setCur} s={s} rev={rev} budget={w.budget} onBudget={(v) => update((x) => ({ ...x, budget: v }))} />
+              <Summary s={s} cur={cur} />
+              <RatingCard s={s} debts={debtRows} />
+              <ExpenseForm cur={cur} s={s} debts={debtRows.filter((d) => d.left > 0)} onAdd={(it) => update((x) => ({ ...x, items: [...x.items, it] }))} />
+              <div className="split">
+                <ExpenseList s={s} lenders={lenders} onDelete={(id) => update((x) => ({ ...x, items: x.items.filter((i) => i.id !== id) }))} />
+                <Breakdown s={s} />
+              </div>
+            </>
+          )}
+          {tab === 'debt' && (
+            <>
+              <DebtsCard rows={debtRows} onAdd={addDebt} onEdit={editDebt} onDelete={deleteDebt} />
+              <OwedCard list={db.owed} onAdd={addOwed} onEdit={editOwed} onDelete={deleteOwed} />
+            </>
+          )}
+          {tab === 'month' && <MonthPanel db={{ ...db, debtRows }} cur={cur} openWeek={openWeek} />}
+          {tab === 'data' && (
+            <>
+              <ExportCard s={s} cur={cur} extra={extra} scope={scope} setScope={setScope} />
+              <EmailCard email={db.email} setEmail={(v) => setDb((d) => ({ ...d, email: v }))} s={s} cur={cur} extra={extra} scope={scope} />
+              <ImportCard onLoad={importData} />
+              <ThemePanel db={db} setDb={setDb} onClear={clear} />
+            </>
+          )}
         </main>
-        <aside className="side"><MonthPanel db={db} cur={cur} setCur={setCur} debtRows={debtRows} /></aside>
-        </div>
       </div>
       <div className={'dock' + (over ? ' neg' : '')} aria-live="polite">
         <div><small>{over ? 'Over budget by' : 'Remaining this week'}</small><b>{fmt(Math.abs(s.rem))}</b></div>
-        <button className="btn" onClick={() => { const el = document.getElementById('name'); el.scrollIntoView({ behavior: 'smooth', block: 'center' }); setTimeout(() => el.focus(), 350); }}>+ Add expense</button>
+        <button className="btn" onClick={jumpToAdd}>+ Add expense</button>
       </div>
     </>
   );
