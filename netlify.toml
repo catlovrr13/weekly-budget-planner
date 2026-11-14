@@ -1,0 +1,24 @@
+# Netlify reads this file on every deploy. Tests and lint run first, so a broken
+# change fails the deploy instead of reaching the live site.
+[build]
+  command = "npm run check && npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+# Never cache index.html, so people always get the newest build; hashed assets can be cached forever.
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-cache"
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    X-Frame-Options = "DENY"
