@@ -1,16 +1,31 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { fmt, weekKey, snap, carryInto, setCurrency, onAccent, r2 } from './utils.js';
+import { fmt, weekKey, snap, carryInto, setCurrency, onAccent, r2, sum, isoDate, addDays } from './utils.js';
 import { KEY, EMPTY, load, save, normalize, uid, debtRowsOf, applyReport, applyRecurring, stopRule } from './data.js';
-import { Tabs, Panel, Toast } from './components/ui.jsx';
-import { WeekPicker, Summary, RatingCard, AddExpenseCard, ExpenseList, RecurringCard, Breakdown } from './components/expenses.jsx';
+import { walletBalances, onHand, removeWallet, addEntries, placeOf, billPayments, billsBetween, categoryStatus } from './features.js';
+import { Tabs, Panel, Toast, plural } from './components/ui.jsx';
+import {
+  WeekPicker,
+  Summary,
+  RatingCard,
+  AddExpenseCard,
+  ExpenseList,
+  RecurringCard,
+  Breakdown,
+  CategoryLimitsCard,
+} from './components/expenses.jsx';
 import { DebtsCard, OwedCard } from './components/debts.jsx';
 import { MonthPanel, SearchCard } from './components/month.jsx';
-import { BackupCard, ExportCard, EmailCard, ImportCard, SettingsPanel } from './components/backup.jsx';
+import { WalletsCard, IncomeCard, GoalsCard } from './components/money.jsx';
+import { BillsDueCard, BillsCard } from './components/bills.jsx';
+import { TrendsCard, YearReviewCard } from './components/reports.jsx';
+import { CsvImportCard } from './components/csvimport.jsx';
+import { BackupCard, ExportCard, EmailCard, ImportCard, SettingsPanel, InstallCard } from './components/backup.jsx';
 
 const TABS = [
   ['expenses', 'Expenses'],
+  ['money', 'Money'],
   ['debt', 'Debt'],
-  ['month', 'Monthly'],
+  ['month', 'Reports'],
   ['data', 'Backup'],
 ];
 const UNDO_MS = 10000;
@@ -33,6 +48,16 @@ export default function App() {
   const debtRows = useMemo(() => debtRowsOf(db), [db]);
   const lenders = useMemo(() => Object.fromEntries(db.debts.map((d) => [d.id, d.lender])), [db.debts]);
   const extra = useMemo(() => ({ debts: debtRows, owed: db.owed }), [debtRows, db.owed]);
+  const walletRows = useMemo(() => walletBalances(db), [db]);
+  const hand = db.wallets.length ? onHand(walletRows) : null;
+  const overCats = categoryStatus(s.items, db.catLimits).filter((c) => c.over);
+  const income = w.income || [];
+  const paidBills = useMemo(() => billPayments(db), [db]);
+  const billsDue = billsBetween(db, isoDate(s.mon), isoDate(addDays(s.mon, 6)), paidBills);
+  const billsMissed =
+    cur === weekKey(new Date())
+      ? billsBetween(db, isoDate(addDays(s.mon, -35)), isoDate(addDays(s.mon, -1)), paidBills).filter((o) => !o.paidBy)
+      : [];
 
   // ---- Saving, and staying in sync with other open tabs ----
   const lastSaved = useRef(null);
@@ -119,7 +144,7 @@ export default function App() {
       ...x,
       items: x.items.map((i) => {
         if (i.id !== id) return i;
-        const { debtId: _old, ...rest } = i;
+        const { debtId: _old, walletId: _w, ...rest } = i;
         return { ...rest, ...v };
       }),
     }));
@@ -146,6 +171,15 @@ export default function App() {
                 const { recurringId: _r, ...rest } = i;
                 return rest;
               }),
+              ...(wk.income
+                ? {
+                    income: wk.income.map((i) => {
+                      if (i.recurringId !== r.id) return i;
+                      const { recurringId: _r, ...rest } = i;
+                      return rest;
+                    }),
+                  }
+                : {}),
               ...(wk.applied ? { applied: wk.applied.filter((x) => x !== r.id) } : {}),
             },
           ]),
@@ -191,6 +225,98 @@ export default function App() {
       (x) => ({ ...x, owed: x.owed.map((y) => (y.id === o.id ? { ...y, payments: y.payments.filter((z) => z.id !== p.id) } : y)) }),
       `Removed ${o.person}’s ${fmt(p.amt)} payment.`,
     );
+
+  // ---- Category limits ----
+  const setLimits = (catLimits) => setDb((d) => ({ ...d, catLimits }));
+
+  // ---- Wallets and transfers ----
+  const addWallet = (v) => setDb((d) => ({ ...d, wallets: [...d.wallets, { id: uid(), ...v }] }));
+  const editWallet = (id, v) => setDb((d) => ({ ...d, wallets: d.wallets.map((x) => (x.id === id ? { ...x, ...v } : x)) }));
+  const deleteWallet = (wal) => change((d) => removeWallet(d, wal.id), `Deleted ${wal.name}. Expenses that used it are kept.`);
+  const addTransfer = (v) => setDb((d) => ({ ...d, transfers: [...d.transfers, { id: uid(), ...v }] }));
+  const deleteTransfer = (t) =>
+    change((d) => ({ ...d, transfers: d.transfers.filter((x) => x.id !== t.id) }), `Removed the ${fmt(t.amt)} transfer.`);
+
+  // ---- Income ----
+  const addIncome = (v, repeat) => {
+    if (!repeat) return setDb((d) => addEntries(d, [{ ...v, kind: 'income' }]));
+    const { key, day } = placeOf(v.date);
+    const rule = {
+      id: uid(),
+      kind: 'income',
+      name: v.name,
+      amt: v.amt,
+      cat: 'Other',
+      day,
+      start: key,
+      end: '',
+      ...(v.walletId != null ? { walletId: v.walletId } : {}),
+    };
+    setDb((d) => {
+      const wk = d.weeks[key] || EMPTY;
+      const { date: _d, ...rest } = v;
+      return {
+        ...d,
+        recurring: [...d.recurring, rule],
+        weeks: {
+          ...d.weeks,
+          [key]: {
+            ...wk,
+            income: [...(wk.income || []), { id: uid(), ...rest, day, recurringId: rule.id }],
+            applied: [...(wk.applied || []), rule.id],
+          },
+        },
+      };
+    });
+  };
+  const deleteIncome = (item) =>
+    change(
+      (d) => ({
+        ...d,
+        weeks: { ...d.weeks, [cur]: { ...d.weeks[cur], income: (d.weeks[cur].income || []).filter((i) => i.id !== item.id) } },
+      }),
+      `Deleted income “${item.name}”.`,
+    );
+
+  // ---- Savings goals ----
+  const addGoal = (v) => setDb((d) => ({ ...d, goals: [...d.goals, { id: uid(), contributions: [], ...v }] }));
+  const contribute = (id, v) =>
+    setDb((d) => ({
+      ...d,
+      goals: d.goals.map((g) => (g.id === id ? { ...g, contributions: [...g.contributions, { id: uid(), ...v }] } : g)),
+    }));
+  const removeContribution = (g, c) =>
+    change(
+      (d) => ({
+        ...d,
+        goals: d.goals.map((x) => (x.id === g.id ? { ...x, contributions: x.contributions.filter((y) => y.id !== c.id) } : x)),
+      }),
+      `Removed ${fmt(c.amt)} from ${g.name}.`,
+    );
+  const deleteGoal = (g) => change((d) => ({ ...d, goals: d.goals.filter((x) => x.id !== g.id) }), `Deleted the goal “${g.name}”.`);
+
+  // ---- Bills ----
+  const addBill = (v) => setDb((d) => ({ ...d, bills: [...d.bills, { id: uid(), ...v }] }));
+  const deleteBill = (b) => change((d) => ({ ...d, bills: d.bills.filter((x) => x.id !== b.id) }), `Deleted the bill “${b.name}”.`);
+  const payBill = (bill, due) =>
+    setDb((d) =>
+      addEntries(d, [
+        {
+          date: due,
+          kind: 'expense',
+          name: bill.name,
+          amt: bill.amt,
+          cat: bill.cat,
+          billId: bill.id,
+          billDue: due,
+          ...(bill.walletId != null ? { walletId: bill.walletId } : {}),
+        },
+      ]),
+    );
+
+  // ---- CSV statements ----
+  const importCsv = (entries, csvPrefs) =>
+    change((d) => ({ ...addEntries(d, entries), csvPrefs }), `Imported ${plural(entries.length, 'transaction')}.`);
 
   // ---- Import and restore (both undoable) ----
   const importData = (p, loadScope) => {
@@ -245,9 +371,18 @@ export default function App() {
               budget={w.budget}
               onBudget={(v) => updateWeek((x) => ({ ...x, budget: v }))}
             />
-            <Summary s={s} cur={cur} />
+            <Summary s={s} cur={cur} income={sum(income)} hand={hand} overCats={overCats} />
+            <BillsDueCard due={billsDue} overdue={billsMissed} onPay={payBill} />
             <RatingCard s={s} debts={debtRows} />
-            <AddExpenseCard key={cur} cur={cur} s={s} debts={debtRows.filter((d) => d.left > 0)} onSave={addItem} />
+            <AddExpenseCard
+              key={`${cur}:${db.wallets.length}`}
+              cur={cur}
+              s={s}
+              debts={debtRows.filter((d) => d.left > 0)}
+              wallets={walletRows}
+              limits={db.catLimits}
+              onSave={addItem}
+            />
             <div className="split">
               <ExpenseList
                 key={cur}
@@ -255,13 +390,44 @@ export default function App() {
                 cur={cur}
                 debts={debtRows}
                 lenders={lenders}
+                wallets={walletRows}
+                limits={db.catLimits}
                 onEdit={editItem}
                 onDelete={deleteItem}
                 onClear={clearWeek}
               />
               <Breakdown s={s} />
             </div>
+            <CategoryLimitsCard items={s.items} limits={db.catLimits} onSave={setLimits} />
             <RecurringCard rules={db.recurring} cur={cur} onStop={stopRecurring} onRemove={removeRecurring} />
+          </Panel>
+          <Panel id="money" tab={tab}>
+            <WalletsCard
+              rows={walletRows}
+              transfers={db.transfers}
+              onAdd={addWallet}
+              onEdit={editWallet}
+              onDelete={deleteWallet}
+              onTransfer={addTransfer}
+              onDeleteTransfer={deleteTransfer}
+            />
+            <IncomeCard
+              key={`${cur}:${db.wallets.length}`}
+              cur={cur}
+              s={s}
+              income={income}
+              wallets={walletRows}
+              onAdd={addIncome}
+              onDelete={deleteIncome}
+            />
+            <GoalsCard
+              goals={db.goals}
+              onAdd={addGoal}
+              onContribute={contribute}
+              onRemoveContribution={removeContribution}
+              onDelete={deleteGoal}
+            />
+            <BillsCard bills={db.bills} wallets={walletRows} onAdd={addBill} onDelete={deleteBill} />
           </Panel>
           <Panel id="debt" tab={tab}>
             <DebtsCard rows={debtRows} onAdd={addDebt} onEdit={editDebt} onDelete={deleteDebt} />
@@ -276,10 +442,14 @@ export default function App() {
           </Panel>
           <Panel id="month" tab={tab}>
             <MonthPanel weeks={db.weeks} debtRows={debtRows} owed={db.owed} cur={cur} carryOver={db.carryOver} openWeek={openWeek} />
+            <TrendsCard weeks={db.weeks} endKey={cur} openWeek={openWeek} />
+            <YearReviewCard db={db} debtRows={debtRows} openWeek={openWeek} />
             <SearchCard weeks={db.weeks} lenders={lenders} openWeek={openWeek} />
           </Panel>
           <Panel id="data" tab={tab}>
+            <InstallCard />
             <BackupCard db={db} onBackedUp={(d) => setDb((x) => ({ ...x, lastBackup: d }))} />
+            <CsvImportCard weeks={db.weeks} wallets={walletRows} prefs={db.csvPrefs} onImport={importCsv} />
             <ExportCard s={s} cur={cur} extra={extra} scope={scope} setScope={setScope} />
             <EmailCard email={db.email} setEmail={(v) => setDb((d) => ({ ...d, email: v }))} s={s} cur={cur} extra={extra} scope={scope} />
             <ImportCard onLoad={importData} onRestore={restoreBackup} />

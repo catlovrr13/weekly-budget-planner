@@ -4,7 +4,14 @@ A soft pink weekly budget tracker built with React and Vite. Pick a week, set yo
 
 ## Features
 
-- **Four tabs:** Expenses, Debt, Monthly and Backup, so each part of the app is one short screen instead of one long scroll.
+- **Five tabs:** Expenses, Money, Debt, Reports and Backup, so each part of the app is one short screen instead of one long scroll.
+- **Installable and offline (PWA):** add it to your home screen from the Backup tab; it opens like a normal app and works without internet.
+- **Category limits:** weekly limits such as "Food ₱1,500" with their own progress bars, a warning while you type an expense that would break one, and a note in the summary when you're over.
+- **Income and wallets:** record allowance or salary (once or every week), keep balances for cash, e-wallets, bank accounts and credit cards, and move money between them. The summary shows money on hand and warns when your budget says more is left than you actually have.
+- **Savings goals:** a target amount and optional date; the app works out how much to set aside each week.
+- **Bills and reminders:** monthly or one-time bills with due dates show up on the Expenses tab in the week they're due, with missed ones flagged. "Mark paid" records the expense.
+- **Reports:** spending by category over the last 8 or 12 weeks (chart or table) and a year in review with monthly totals, top categories and highlights.
+- **Statement import (CSV):** load a bank or e-wallet CSV export. The app finds the date, description and amount columns (you can correct them), guesses categories, flags rows you already added, and remembers your choices for next time.
 - **Week calendar:** choose any week of the year, or jump with Prev, Next and This week. Each week keeps its own budget and expenses.
 - **Live budget:** every expense you add or delete instantly updates Budget, Spent and Remaining.
 - **Over-budget alert:** the bar and summary turn red and show "Over budget by ₱X" when you exceed your budget.
@@ -15,7 +22,7 @@ A soft pink weekly budget tracker built with React and Vite. Pick a week, set yo
 - **Breakdowns:** spending by category and day by day, plus a suggested daily spend for the days left in the week.
 - **Weekly rating:** a 1–5 star score out of 100 for how the week went, with the reasons behind it.
 - **Debt tracking:** list what you owe and what people owe you. Paying a debt is an expense tagged with the debt, so balances follow your weekly spending. Record partial repayments from people who owe you.
-- **Monthly summary:** every week of a month at a glance, with leftovers, overspending, debt payments and expected repayments. Tap a week to open it.
+- **Monthly summary (Reports tab):** every week of a month at a glance, with leftovers, overspending, debt payments and expected repayments. Tap a week to open it.
 - **Search:** find expenses across every week by name, lender, category or date range.
 - **Full backup:** download everything as one .json file and restore it on any device. The app reminds you when it's been a while.
 - **Export, whole or partial:** download everything (expenses **and** debts), expenses only, or debts only, as a `.txt` report or an Excel `.xlsx` file with formulas.
@@ -62,16 +69,21 @@ Then open http://localhost:5173 in your browser.
 
 ```
 .
-├── index.html              # App shell and font links
+├── index.html              # App shell, icons and manifest links
 ├── netlify.toml            # Netlify build settings (runs lint + tests before every deploy)
 ├── eslint.config.js, .prettierrc.json
-├── vite.config.js          # Vite + Vitest config
+├── vite.config.js          # Vite + Vitest config, and the step that builds the service worker
+├── public/                 # Web app manifest and icons
+├── pwa/sw.js               # Service worker template (offline support)
+├── scripts/make-icons.mjs  # Redraws the PNG icons: node scripts/make-icons.mjs
 └── src/
-    ├── main.jsx            # React entry point
-    ├── App.jsx             # App state, saving, undo, and the four tabs
-    ├── data.js             # Saved data: validation, upgrades, imports, full backups, recurring expenses
+    ├── main.jsx            # React entry point, registers the service worker
+    ├── App.jsx             # App state, saving, undo, and the five tabs
+    ├── data.js             # Saved data: validation, upgrades, imports, full backups, recurring expenses and income
+    ├── features.js         # Wallets, income, bills, goals, category limits, trends, year in review
+    ├── csv.js              # Reading bank/e-wallet CSV statements
     ├── utils.js            # Week math, money, currency, rating, .txt/.xlsx export and .txt parsing
-    ├── components/         # Expenses, debts, monthly/search, backup/settings and shared UI pieces
+    ├── components/         # One file per area: expenses, money, bills, debts, reports, month/search, backup, CSV import
     ├── test/               # Vitest unit tests and app tests (Testing Library)
     └── styles.css          # Pink theme, tabs, layout and mobile styles
 ```
@@ -87,9 +99,17 @@ On the **Expenses** tab:
 
 On the **Debt** tab, list what you borrowed and what people owe you. To pay a debt down, go back to Expenses, add the payment and pick the debt under "This pays off a debt" — the balance drops on its own, and goes back up if you delete that expense.
 
-On the **Monthly** tab, step through months to see how each week went, and tap a week to open it. Use **Find expenses** to search every week.
+Also on the Expenses tab: **Bills due** this week, and **Category limits** below the list.
 
-On the **Backup** tab, download a full backup, export or email one week, or load a `.json` backup or `.txt` report back in. Settings (theme, currency and carry-over) live here too. "Clear week" is on the Expenses tab, next to the list.
+On the **Money** tab, add your wallets (cash, GCash, bank, credit card) with their starting balances, record income, set savings goals, and add bills with due dates. Then pick a wallet when you add an expense and its balance updates.
+
+On the **Debt** tab, list what you borrowed and what people owe you.
+
+On the **Reports** tab, step through months, see spending by week and the year in review, and use **Find expenses** to search every week.
+
+On the **Backup** tab, install the app, download a full backup, import a bank or e-wallet CSV statement, export or email one week, or load a `.json` backup or `.txt` report back in. Settings (theme, currency and carry-over) live here too.
+
+**About CSV statements:** every bank lays its file out differently, so check the column boxes the first time; the app remembers them. GCash and Maya usually send statements as PDF; open the PDF in Excel or Google Sheets and save it as CSV first.
 
 ## Customizing the theme
 
@@ -113,4 +133,6 @@ For other static hosts, run `npm run build` and upload `dist/`. If you deploy to
 
 - **Data storage:** budgets and expenses are saved in your browser's `localStorage`. They stay on that device and browser, don't sync between devices, and are erased if you clear your browser data. Download a full `.json` backup now and then. Saved data is checked when the app loads, and if it can't be read, the original is kept rather than overwritten. Two open tabs stay in sync.
 - **Week picker support:** the calendar uses `<input type="week">`, which works in Chrome, Edge and most mobile browsers. Desktop Safari and Firefox show a plain text box where you type a week like `2026-W44`. Prev, Next and This week work everywhere.
+- **Offline and updates:** once installed (or after one visit), the app works offline. A new deploy is picked up the next time the app is opened with internet.
+- **Reminders:** bill reminders show inside the app. Phone notifications while the app is closed would need a server, so they aren't included.
 - **Currency:** Philippine Peso by default; change it under Settings. This only changes the symbol, and amounts aren't converted.

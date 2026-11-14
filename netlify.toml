@@ -12,6 +12,17 @@
   for = "/index.html"
   [headers.values]
     Cache-Control = "no-cache"
+# The service worker must always be re-checked, or phones could stay on an old version.
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+    Service-Worker-Allowed = "/"
+[[headers]]
+  for = "/manifest.webmanifest"
+  [headers.values]
+    Content-Type = "application/manifest+json"
+    Cache-Control = "no-cache"
 [[headers]]
   for = "/assets/*"
   [headers.values]

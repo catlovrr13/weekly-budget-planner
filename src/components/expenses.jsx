@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { DAYS, CATS, fmt, sym, weekKey, addDays, short, group, r2, mondayOf, rateWeek, starText } from '../utils.js';
+import { DAYS, CATS, fmt, sym, weekKey, addDays, short, group, r2, sum, mondayOf, rateWeek, starText } from '../utils.js';
+import { categoryStatus } from '../features.js';
 import { Bars } from './ui.jsx';
 
 export function WeekPicker({ cur, setCur, s, rev, budget, onBudget }) {
@@ -49,7 +50,7 @@ export function WeekPicker({ cur, setCur, s, rev, budget, onBudget }) {
   );
 }
 
-export function Summary({ s, cur }) {
+export function Summary({ s, cur, income = 0, hand = null, overCats = [] }) {
   const over = s.rem < 0;
   const pct = s.b > 0 ? Math.min(100, (s.spent / s.b) * 100) : s.spent > 0 ? 100 : 0;
   const now = new Date();
@@ -91,6 +92,22 @@ export function Summary({ s, cur }) {
       {!over && s.b > 0 && left > 0 && (
         <div className="ok">
           You can spend about {fmt(s.rem / left)} a day for the {left} day{left > 1 ? 's' : ''} left.
+        </div>
+      )}
+      {overCats.length > 0 && (
+        <div className="alert soft" role="status">
+          Over the limit: {overCats.map((c) => `${c.cat} (${fmt(c.spent)} of ${fmt(c.limit)})`).join(', ')}.
+        </div>
+      )}
+      {(income > 0 || hand !== null) && (
+        <div className="ok">
+          {income > 0 ? `Income this week: ${fmt(income)}. ` : ''}
+          {hand !== null ? `Money on hand: ${fmt(hand)}.` : ''}
+        </div>
+      )}
+      {hand !== null && !over && s.b > 0 && s.rem > hand && (
+        <div className="alert soft" role="status">
+          Your budget still has {fmt(s.rem)} left, but you only have {fmt(hand)} on hand.
         </div>
       )}
     </section>
@@ -142,7 +159,7 @@ export function RatingCard({ s, debts }) {
  * Add or edit one expense. `idp` prefixes the field ids so the edit form and the add form never clash.
  * onSave(values, repeatWeekly)
  */
-export function ExpenseForm({ cur, s, debts = [], onSave, onCancel, initial, idp = '' }) {
+export function ExpenseForm({ cur, s, debts = [], wallets = [], limits = {}, onSave, onCancel, initial, idp = '' }) {
   const editing = !!initial;
   const todayIdx = weekKey(new Date()) === cur ? (new Date().getDay() + 6) % 7 : 0;
   const [f, setF] = useState(() =>
@@ -153,9 +170,10 @@ export function ExpenseForm({ cur, s, debts = [], onSave, onCancel, initial, idp
           cat: initial.cat,
           day: initial.day,
           debt: initial.debtId != null ? String(initial.debtId) : '',
+          wallet: initial.walletId != null ? String(initial.walletId) : '',
           repeat: false,
         }
-      : { name: '', amt: '', cat: CATS[0], day: todayIdx, debt: '', repeat: false },
+      : { name: '', amt: '', cat: CATS[0], day: todayIdx, debt: '', wallet: wallets[0] ? String(wallets[0].id) : '', repeat: false },
   );
   const [err, setErr] = useState({});
   useEffect(() => {
@@ -173,6 +191,14 @@ export function ExpenseForm({ cur, s, debts = [], onSave, onCancel, initial, idp
   const dbt = debts.find((d) => String(d.id) === f.debt);
   const room = dbt ? r2(dbt.left + (initial && String(initial.debtId) === f.debt ? initial.amt : 0)) : 0;
   const tooMuch = !!dbt && a > room;
+  const catNow = dbt ? 'Debt' : f.cat;
+  const limit = limits[catNow];
+  const catAfter = r2(sum(s.items.filter((i) => i.cat === catNow && i.id !== initial?.id)) + (a > 0 ? a : 0));
+  const wal = wallets.find((w) => String(w.id) === f.wallet);
+  const walRoom = wal ? r2(wal.balance + (initial && String(initial.walletId) === f.wallet ? initial.amt : 0)) : 0;
+  const warnings =
+    (limit && a > 0 && catAfter > limit ? ` This puts ${catNow} over its ${fmt(limit)} limit.` : '') +
+    (wal && wal.kind !== 'card' && a > walRoom ? ` That’s more than the ${fmt(walRoom)} in ${wal.name}.` : '');
   const pickDebt = (e) => {
     const v = e.target.value,
       d = debts.find((x) => String(x.id) === v);
@@ -201,7 +227,14 @@ export function ExpenseForm({ cur, s, debts = [], onSave, onCancel, initial, idp
       return focus('amt');
     }
     onSave(
-      { name: f.name.trim(), amt: r2(a), cat: dbt ? 'Debt' : f.cat, day: +f.day, ...(dbt ? { debtId: dbt.id } : {}) },
+      {
+        name: f.name.trim(),
+        amt: r2(a),
+        cat: dbt ? 'Debt' : f.cat,
+        day: +f.day,
+        ...(dbt ? { debtId: dbt.id } : {}),
+        ...(wal ? { walletId: wal.id } : {}),
+      },
       !dbt && f.repeat,
     );
     if (!editing) {
@@ -216,7 +249,9 @@ export function ExpenseForm({ cur, s, debts = [], onSave, onCancel, initial, idp
       ? `That’s more than the ${fmt(room)} left on this debt.`
       : (after < 0
           ? `${editing ? 'With this change' : 'Adding this'} would put you over budget by ${fmt(-after)}.`
-          : `After this, you’ll have ${fmt(after)} left.`) + (dbt ? ` ${dbt.lender}’s debt will drop to ${fmt(r2(room - a))}.` : ''));
+          : `After this, you’ll have ${fmt(after)} left.`) +
+        (dbt ? ` ${dbt.lender}’s debt will drop to ${fmt(r2(room - a))}.` : '') +
+        warnings);
 
   return (
     <>
@@ -290,6 +325,19 @@ export function ExpenseForm({ cur, s, debts = [], onSave, onCancel, initial, idp
             </select>
           </div>
         )}
+        {wallets.length > 0 && (
+          <div className="f">
+            <label htmlFor={id('wallet')}>Paid from</label>
+            <select id={id('wallet')} value={f.wallet} onChange={set('wallet')}>
+              <option value="">Not tracked</option>
+              {wallets.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.name} ({fmt(w.balance)})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         {!editing && !dbt && (
           <label className="chk" htmlFor={id('repeat')}>
             <input type="checkbox" id={id('repeat')} checked={f.repeat} onChange={set('repeat')} /> Repeat every week
@@ -320,7 +368,8 @@ export function AddExpenseCard(props) {
   );
 }
 
-export function ExpenseList({ s, cur, debts, lenders, onEdit, onDelete, onClear }) {
+export function ExpenseList({ s, cur, debts, lenders, wallets = [], limits = {}, onEdit, onDelete, onClear }) {
+  const walletNames = Object.fromEntries(wallets.map((w) => [w.id, w.name]));
   const [editing, setEditing] = useState(null);
   const done = (id) => {
     setEditing(null);
@@ -348,6 +397,8 @@ export function ExpenseList({ s, cur, debts, lenders, onEdit, onDelete, onClear 
                   idp="edit-"
                   initial={i}
                   debts={debts.filter((d) => d.left > 0 || d.id === i.debtId)}
+                  wallets={wallets}
+                  limits={limits}
                   onSave={(v) => {
                     onEdit(i.id, v);
                     done(i.id);
@@ -364,6 +415,8 @@ export function ExpenseList({ s, cur, debts, lenders, onEdit, onDelete, onClear 
                   {DAYS[i.day]}, {short(addDays(s.mon, i.day))}
                   {i.debtId != null && lenders[i.debtId] ? ` · pays ${lenders[i.debtId]}` : ''}
                   {i.recurringId != null ? ' · repeats weekly' : ''}
+                  {i.walletId != null && walletNames[i.walletId] ? ` · ${walletNames[i.walletId]}` : ''}
+                  {i.billId != null ? ' · bill' : ''}
                 </span>
               </div>
               <span className="tag">{i.cat}</span>
@@ -391,8 +444,8 @@ export function ExpenseList({ s, cur, debts, lenders, onEdit, onDelete, onClear 
 export function RecurringCard({ rules, cur, onStop, onRemove }) {
   if (!rules.length) return null;
   return (
-    <section className="card" aria-label="Recurring expenses">
-      <h2>Recurring expenses</h2>
+    <section className="card" aria-label="Recurring expenses and income">
+      <h2>Recurring expenses and income</h2>
       <p className="sub" style={{ marginBottom: 8 }}>
         These are added to every week from the week you set them up. Deleting one week’s copy doesn’t stop the others.
       </p>
@@ -403,7 +456,7 @@ export function RecurringCard({ rules, cur, onStop, onRemove }) {
               <div className="grow">
                 <b>{r.name}</b>
                 <span>
-                  {r.cat} · every {DAYS[r.day]} · since week of {short(mondayOf(r.start))}
+                  {r.kind === 'income' ? 'Income' : r.cat} · every {DAYS[r.day]} · since week of {short(mondayOf(r.start))}
                   {r.end ? ` · stopped after week of ${short(mondayOf(r.end))}` : ''}
                 </span>
               </div>
@@ -423,6 +476,90 @@ export function RecurringCard({ rules, cur, onStop, onRemove }) {
           </li>
         ))}
       </ul>
+    </section>
+  );
+}
+
+export function CategoryLimitsCard({ items, limits, onSave }) {
+  const [draft, setDraft] = useState(null);
+  const rows = categoryStatus(items, limits);
+  const start = () => setDraft(Object.fromEntries(CATS.map((c) => [c, limits[c] ? String(limits[c]) : ''])));
+  const save = (e) => {
+    e.preventDefault();
+    onSave(Object.fromEntries(CATS.map((c) => [c, r2(parseFloat(draft[c]))]).filter(([, v]) => v > 0)));
+    setDraft(null);
+  };
+  return (
+    <section className="card" aria-label="Category limits">
+      <div className="lhead">
+        <h2>Category limits</h2>
+        {!draft && (
+          <button className="btn ghost sm" type="button" onClick={start}>
+            {rows.length ? 'Edit limits' : 'Set limits'}
+          </button>
+        )}
+      </div>
+      {draft ? (
+        <form onSubmit={save} onKeyDown={(e) => e.key === 'Escape' && setDraft(null)}>
+          <p className="sub" style={{ marginBottom: 10 }}>
+            Weekly limit for each category. Leave a box empty for no limit.
+          </p>
+          <div className="limits">
+            {CATS.map((c) => (
+              <label className="f" key={c}>
+                <span>
+                  {c} ({sym()} per week)
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  inputMode="decimal"
+                  value={draft[c]}
+                  onChange={(e) => setDraft({ ...draft, [c]: e.target.value })}
+                  placeholder="No limit"
+                />
+              </label>
+            ))}
+          </div>
+          <div className="row" style={{ marginTop: 12 }}>
+            <button className="btn" type="submit">
+              Save limits
+            </button>
+            <button className="btn ghost" type="button" onClick={() => setDraft(null)}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      ) : rows.length ? (
+        <ul>
+          {rows.map((r) => (
+            <li className="lim" key={r.cat}>
+              <div className="dtop">
+                <b>{r.cat}</b>
+                <span className={'chip ' + (r.over ? 'over' : 'good')}>{r.over ? `Over by ${fmt(-r.left)}` : `${fmt(r.left)} left`}</span>
+              </div>
+              <div
+                className={'bar' + (r.over ? ' over' : '')}
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(Math.min(100, r.pct))}
+                aria-label={`${r.cat} limit used`}
+              >
+                <i style={{ width: Math.min(100, r.pct) + '%' }} />
+              </div>
+              <div className="wk-n">
+                {fmt(r.spent)} of {fmt(r.limit)}
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="hint" style={{ marginTop: 0 }}>
+          Set a weekly limit for a category, like Food {fmt(1500)}, to get a warning before you overspend in it.
+        </p>
+      )}
     </section>
   );
 }

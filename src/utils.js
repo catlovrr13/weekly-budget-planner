@@ -39,6 +39,9 @@ export const sym = () =>
     .formatToParts(0)
     .find((p) => p.type === 'currency')?.value || CUR;
 export const fmt = (n) => nf().format(r2(n));
+// Short form for chart axes: ₱1.5K, ₱12K.
+export const fmtShort = (n) =>
+  new Intl.NumberFormat('en-PH', { style: 'currency', currency: CUR, notation: 'compact', maximumFractionDigits: 1 }).format(n);
 // Plain-text money for .txt reports: symbol + 2 decimals.
 export const money = (n) => sym() + r2(n).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const MONEY = String.raw`[^\d\s|-]*\s*([\d,]+(?:\.\d+)?)`; // any currency symbol, then the number
@@ -196,6 +199,17 @@ export function txtReport(s, key, extra = {}, scope = 'all') {
   if (wantEx) L.push('Total spent: ' + money(s.spent));
   L.push('Exported: ' + new Date().toLocaleString('en-PH'));
   return L.join('\r\n');
+}
+
+/** Reads a chosen file as text. Uses FileReader where File.text() isn't available (Safari before 14). */
+export function readText(file) {
+  if (typeof file.text === 'function') return file.text();
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(r.error);
+    r.readAsText(file);
+  });
 }
 
 export function downloadBlob(text, name, type = 'text/plain;charset=utf-8') {

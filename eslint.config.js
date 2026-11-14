@@ -7,7 +7,7 @@ export default [
   { ignores: ['dist', 'node_modules'] },
   js.configs.recommended,
   {
-    files: ['**/*.{js,jsx}'],
+    files: ['**/*.{js,jsx,mjs}'],
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'module',
@@ -23,5 +23,10 @@ export default [
       'react/prop-types': 'off',
       'no-unused-vars': ['error', { varsIgnorePattern: '^_', argsIgnorePattern: '^_', destructuredArrayIgnorePattern: '^_' }],
     },
+  },
+  {
+    // Service worker template: runs in the worker, and the build fills in __PRECACHE__.
+    files: ['pwa/**/*.js'],
+    languageOptions: { globals: { ...globals.serviceworker, __PRECACHE__: 'readonly' } },
   },
 ];

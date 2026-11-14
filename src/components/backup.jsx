@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   SCOPES,
   CURRENCIES,
@@ -14,9 +14,70 @@ import {
   fmtDate,
   contrast,
   onAccent,
+  readText,
 } from '../utils.js';
 import { backupJson, parseBackup } from '../data.js';
 import { plural } from './ui.jsx';
+
+const isStandalone = () => window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
+
+/** "Add to Home Screen". Chrome/Edge/Android get a button; iPhone and iPad get the Share-menu steps. */
+export function InstallCard() {
+  const [prompt, setPrompt] = useState(null);
+  const [installed, setInstalled] = useState(isStandalone);
+  useEffect(() => {
+    const onPrompt = (e) => {
+      e.preventDefault();
+      setPrompt(e);
+    };
+    const onInstalled = () => {
+      setInstalled(true);
+      setPrompt(null);
+    };
+    window.addEventListener('beforeinstallprompt', onPrompt);
+    window.addEventListener('appinstalled', onInstalled);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onPrompt);
+      window.removeEventListener('appinstalled', onInstalled);
+    };
+  }, []);
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const install = async () => {
+    prompt.prompt();
+    const { outcome } = await prompt.userChoice;
+    if (outcome === 'accepted') setInstalled(true);
+    setPrompt(null);
+  };
+  return (
+    <section className="card" aria-label="Install the app">
+      <h2>Install the app</h2>
+      {installed ? (
+        <p className="sub" style={{ margin: 0 }}>
+          You’re using the installed app. It opens from your home screen and works without internet.
+        </p>
+      ) : (
+        <>
+          <p className="sub" style={{ marginBottom: 12 }}>
+            Add it to your home screen so it opens like a normal app and works without internet. Your data stays on this device either way.
+          </p>
+          {prompt ? (
+            <button className="btn" type="button" onClick={install}>
+              Install app
+            </button>
+          ) : ios ? (
+            <p className="hint" style={{ margin: 0 }}>
+              On iPhone or iPad: open this page in Safari, tap the Share button, then “Add to Home Screen”.
+            </p>
+          ) : (
+            <p className="hint" style={{ margin: 0 }}>
+              In Chrome or Edge, use the install icon in the address bar, or the browser menu’s “Install app” / “Add to Home screen”.
+            </p>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
 
 function ScopeField({ id, value, onChange }) {
   return (
@@ -191,7 +252,7 @@ export function ImportCard({ onLoad, onRestore }) {
       return setErr('That file is too large (5 MB max).');
     }
     try {
-      setFile({ name: f.name, text: await f.text() });
+      setFile({ name: f.name, text: await readText(f) });
       setErr('');
     } catch {
       setFile(null);

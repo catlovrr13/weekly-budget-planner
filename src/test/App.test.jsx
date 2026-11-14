@@ -46,13 +46,13 @@ describe('App', () => {
 
   it('can undo clearing the week, and the button lives on the Expenses tab', () => {
     render(<App />);
-    addExpense('A', 1);
-    addExpense('B', 2);
+    addExpense('Apples', 1);
+    addExpense('Bananas', 2);
     fireEvent.click(screen.getByRole('button', { name: 'Clear week' }));
     expect(screen.getByText('No expenses yet for this week.')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
-    expect(screen.getByText('A')).toBeTruthy();
-    expect(screen.getByText('B')).toBeTruthy();
+    expect(screen.getByText('Apples')).toBeTruthy();
+    expect(screen.getByText('Bananas')).toBeTruthy();
   });
 
   it('edits an expense', () => {
@@ -161,7 +161,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Next week' }));
     addExpense('Jollibee again', 99);
     addExpense('Bus', 20);
-    fireEvent.click(screen.getByRole('tab', { name: 'Monthly' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Reports' }));
     fireEvent.change(screen.getByLabelText('Search by name or lender'), { target: { value: 'jolli' } });
     expect(screen.getByText(/2 expenses found, totalling ₱249\.00/)).toBeTruthy();
   });

@@ -62,6 +62,8 @@ export function MonthPanel({ weeks: allWeeks, debtRows, owed, cur, carryOver, op
   const rated = weeks.filter((w) => w.r);
   const avg = rated.length ? Math.round(rated.reduce((a, w) => a + w.r.score, 0) / rated.length) : null;
   const debtPaidMonth = sum(weeks, (w) => w.debtPaid);
+  const incomeMonth = sum(weeks, (w) => sum(allWeeks[w.key]?.income || []));
+  const spentMonth = sum(weeks, (w) => w.s.spent);
   const debtLeft = sum(debtRows, (d) => d.left);
   const owedTotal = sum(owed, owedLeft);
   const prefix = `${m.y}-${String(m.mo + 1).padStart(2, '0')}`;
@@ -94,6 +96,14 @@ export function MonthPanel({ weeks: allWeeks, debtRows, owed, cur, carryOver, op
           <small>Weeks within budget</small>
           <b>{started.length ? `${onTrack} of ${started.length}` : 'None tracked yet'}</b>
         </div>
+        {incomeMonth > 0 && (
+          <div className={'mstat' + (incomeMonth >= spentMonth ? ' good' : ' over')}>
+            <small>Income · spent</small>
+            <b>
+              {fmt(incomeMonth)} · {fmt(spentMonth)}
+            </b>
+          </div>
+        )}
       </div>
       <h3 className="sec">Debts and loans</h3>
       <div className="mstats">
